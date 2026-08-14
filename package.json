@@ -1,6 +1,6 @@
 {
   "name": "mcp-video-studio",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Standalone MCP video editor, human studio, media engine, and deterministic HTML5 animation renderer.",
   "type": "module",
   "bin": {
