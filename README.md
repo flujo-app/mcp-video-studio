@@ -75,6 +75,10 @@ After publishing/installing the package, a stdio client can use:
 
 For a source checkout, use the absolute path to `dist/index.js` with `node`.
 
+The `open_studio` MCP App supports the standard `inline`, `fullscreen`, and
+picture-in-picture (`pip`) display modes. Its header exposes the modes supported
+by the current host; PiP switches to a compact, preview-focused workspace.
+
 The main MCP tools are:
 
 - `open_studio`, `doctor`, `list_projects`, `create_project`, `get_project`, `get_sequence`
@@ -171,6 +175,21 @@ npx vitest run tests/render.integration.test.ts tests/preview.integration.test.t
 ```
 
 The implementation never constructs shell command strings for media work. It passes explicit arguments with `shell: false`, publishes only completed artifacts, removes render scratch data, and preserves structured dependency/runtime errors.
+
+## Release
+
+To publish the current version:
+
+```powershell
+npm run release
+```
+
+The release command signs in through npm when necessary, runs the complete
+check suite, publishes the package publicly, and confirms that npm serves the
+version. It is safe to rerun: if that exact version is already published, it
+verifies the project and skips the duplicate publish.
+
+Run `npm run release:check` to validate the release helper without publishing.
 
 ## License
 

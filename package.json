@@ -27,6 +27,8 @@
     "test": "vitest run",
     "test:watch": "vitest",
     "check": "npm run typecheck && npm run test && npm run build",
+    "release": "node scripts/release-npm.mjs",
+    "release:check": "node scripts/release-npm.mjs --check",
     "prepack": "npm run check"
   },
   "engines": {
@@ -44,6 +46,9 @@
   "repository": {
     "type": "git",
     "url": "git+https://github.com/flujo-app/mcp-video-studio.git"
+  },
+  "publishConfig": {
+    "access": "public"
   },
   "dependencies": {
     "@modelcontextprotocol/ext-apps": "^1.7.5",

@@ -4,6 +4,7 @@ import { RESOURCE_MIME_TYPE, registerAppResource, registerAppTool } from "@model
 import { z } from "zod";
 import { asStudioError, StudioException } from "@mcp-video-studio/core";
 import type { AnimationDocument, ClipSource, GenerationRequest, ProjectCommand } from "@mcp-video-studio/contracts";
+import { createStudioAppHtml } from "./app-view.js";
 import type { Gateway } from "./gateway.js";
 import type { StudioRuntime } from "./runtime.js";
 
@@ -32,7 +33,7 @@ export function createMcpServer(runtime: StudioRuntime, gateway: Gateway): McpSe
     title: "Open Video Studio",
     description: "Open the full human video editor. Optionally opens a project path.",
     inputSchema: { projectPath: z.string().optional() },
-    _meta: { ui: { resourceUri: APP_URI, visibility: ["model"] } },
+    _meta: { ui: { resourceUri: APP_URI, visibility: ["model"] }, "openai/outputTemplate": APP_URI },
     annotations: { readOnlyHint: true, openWorldHint: false }
   }, async ({ projectPath }) => invoke(async () => ({ success: true, studioUrl: `${gateway.origin}/?token=${encodeURIComponent(gateway.token)}${projectPath ? `&projectPath=${encodeURIComponent(projectPath)}` : ""}`, ...(projectPath ? await runtime.getProject(projectPath) : await runtime.listProjects()) })));
 
@@ -43,7 +44,7 @@ export function createMcpServer(runtime: StudioRuntime, gateway: Gateway): McpSe
     contents: [{
       uri: APP_URI,
       mimeType: RESOURCE_MIME_TYPE,
-      text: `<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><style>html,body,iframe{border:0;margin:0;width:100%;height:100%;min-height:760px;background:#080b10}iframe{display:block}</style></head><body><iframe allow="autoplay; fullscreen" src="${gateway.origin}/?token=${encodeURIComponent(gateway.token)}"></iframe></body></html>`,
+      text: createStudioAppHtml(`${gateway.origin}/?token=${encodeURIComponent(gateway.token)}`),
       _meta: { ui: { csp: { frameDomains: [gateway.origin] }, prefersBorder: false } }
     }]
   }));

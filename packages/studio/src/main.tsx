@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import {
   TICKS_PER_SECOND,
@@ -23,6 +23,13 @@ import {
 } from "@mcp-video-studio/contracts";
 import "./styles.css";
 import "./layout-fixes.css";
+import {
+  STUDIO_DISPLAY_MODES,
+  getStudioDisplayState,
+  requestStudioDisplayMode,
+  subscribeToStudioDisplayState,
+  type McpUiDisplayMode,
+} from "./mcp-app.js";
 
 const token = new URLSearchParams(location.search).get("token") || document.body.dataset.token || "";
 
@@ -62,6 +69,7 @@ function clipColor(clip: Clip, media?: MediaAsset): string {
 }
 
 function App() {
+  const display = useSyncExternalStore(subscribeToStudioDisplayState, getStudioDisplayState, getStudioDisplayState);
   const [projects, setProjects] = useState<Array<{ path: string; name: string; projectId: string; revision: number }>>([]);
   const [projectPath, setProjectPath] = useState(new URLSearchParams(location.search).get("projectPath") || localStorage.getItem("mcp-video-studio:lastProject") || "");
   const [project, setProject] = useState<StudioProject>();
@@ -229,7 +237,18 @@ function App() {
     } catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); setNotice("Preview failed"); }
   };
 
-  return <div className="app-shell">
+  const switchDisplayMode = async (mode: McpUiDisplayMode) => {
+    try {
+      setError(""); setNotice(`Switching to ${mode} view…`);
+      const actualMode = await requestStudioDisplayMode(mode);
+      setNotice(`Using ${actualMode} view`);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setNotice("View change rejected");
+    }
+  };
+
+  return <div className={`app-shell display-${display.mode}`}>
     <header className="topbar">
       <button className="brand" onClick={() => setShowProjects(true)}><span className="brand-mark">▶</span><span>MCP Video Studio</span></button>
       <div className="project-title"><span>{project?.name ?? "No project"}</span>{project && <small>rev {project.revision}</small>}</div>
@@ -244,7 +263,14 @@ function App() {
         <button onClick={() => void splitSelected()} disabled={!selectedClip}>Split</button>
         <button className="danger" onClick={() => void removeSelected()} disabled={!selectedClip && !selectedCaption}>Delete</button>
       </div>
-      <div className="status"><span className="status-dot" />{notice}</div>
+      {display.embedded && <div className="display-modes" role="group" aria-label="Studio view mode">
+        {STUDIO_DISPLAY_MODES.map((mode) => {
+          const available = display.connected && display.availableDisplayModes.includes(mode);
+          const label = mode === "pip" ? "PiP" : mode[0]!.toUpperCase() + mode.slice(1);
+          return <button key={mode} type="button" className={display.mode === mode ? "active" : ""} aria-pressed={display.mode === mode} disabled={!available} title={available ? `Use ${label} view` : `${label} view is unavailable in this host`} onClick={() => void switchDisplayMode(mode)}>{label}</button>;
+        })}
+      </div>}
+      <div className="status" title={display.error ?? notice}><span className={`status-dot ${display.error ? "error" : ""}`} />{notice}</div>
     </header>
 
     {error && <div className="error-banner"><span>{error}</span><button onClick={() => setError("")}>×</button></div>}
