@@ -1,0 +1,19 @@
+{
+  "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
+  "name": "io.github.flujo-app/mcp-video-studio",
+  "description": "Standalone multi-track video editor, MCP App studio, audio engine, and deterministic HTML5 animation renderer.",
+  "version": "0.1.0",
+  "packages": [
+    {
+      "registryType": "npm",
+      "identifier": "mcp-video-studio",
+      "version": "0.1.0",
+      "transport": { "type": "stdio" },
+      "environmentVariables": [
+        { "name": "VIDEO_STUDIO_DATA_DIR", "description": "Base directory for standalone Studio state." },
+        { "name": "VIDEO_STUDIO_FFMPEG_PATH", "description": "Absolute ffmpeg executable path." },
+        { "name": "VIDEO_STUDIO_FFPROBE_PATH", "description": "Absolute ffprobe executable path." }
+      ]
+    }
+  ]
+}

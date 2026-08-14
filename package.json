@@ -1,0 +1,64 @@
+{
+  "name": "mcp-video-studio",
+  "version": "0.1.0",
+  "description": "Standalone MCP video editor, human studio, media engine, and deterministic HTML5 animation renderer.",
+  "type": "module",
+  "bin": {
+    "mcp-video-studio": "dist/index.js"
+  },
+  "main": "dist/index.js",
+  "files": [
+    "dist",
+    "server.json",
+    "README.md",
+    "LICENSE"
+  ],
+  "workspaces": [
+    "packages/*"
+  ],
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "dev": "node scripts/build.mjs --watch",
+    "start": "node dist/index.js --stdio",
+    "serve": "node dist/index.js --http",
+    "doctor": "node dist/index.js doctor",
+    "runtime:install": "patchright install chromium",
+    "typecheck": "tsc -p tsconfig.json --noEmit",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "check": "npm run typecheck && npm run test && npm run build",
+    "prepack": "npm run check"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "keywords": [
+    "mcp",
+    "mcp-app",
+    "video-editor",
+    "ffmpeg",
+    "animation",
+    "timeline"
+  ],
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/flujo-app/mcp-video-studio.git"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/ext-apps": "^1.7.5",
+    "@modelcontextprotocol/sdk": "^1.30.0",
+    "patchright": "1.61.1",
+    "react": "^19.2.0",
+    "react-dom": "^19.2.0",
+    "zod": "^4.4.0"
+  },
+  "devDependencies": {
+    "@types/node": "^22.20.0",
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "esbuild": "^0.25.8",
+    "typescript": "^6.0.0",
+    "vitest": "^3.2.4"
+  }
+}

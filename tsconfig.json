@@ -1,0 +1,16 @@
+{
+  "extends": "./tsconfig.base.json",
+  "compilerOptions": {
+    "noEmit": true,
+    "baseUrl": ".",
+    "ignoreDeprecations": "6.0",
+    "paths": {
+      "@mcp-video-studio/contracts": ["packages/contracts/src/index.ts"],
+      "@mcp-video-studio/core": ["packages/core/src/index.ts"],
+      "@mcp-video-studio/media": ["packages/media/src/index.ts"],
+      "@mcp-video-studio/renderer": ["packages/renderer/src/index.ts"],
+      "@mcp-video-studio/animation": ["packages/animation/src/index.ts"]
+    }
+  },
+  "include": ["packages/**/*.ts", "packages/**/*.tsx", "tests/**/*.ts", "scripts/**/*.mjs"]
+}
