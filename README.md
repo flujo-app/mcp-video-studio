@@ -4,6 +4,21 @@ A standalone multi-track video editor for people and MCP clients. It combines a 
 
 This repository is intentionally standalone. It does not ship inside FLUJO and does not modify FLUJO source code.
 
+## Project status
+
+The current release is [`0.1.1`](https://www.npmjs.com/package/mcp-video-studio), a working pre-v1 vertical slice published from the canonical [`flujo-app/mcp-video-studio`](https://github.com/flujo-app/mcp-video-studio) repository. It delivers an end-to-end human/MCP edit, preview, generation, render, and QC path. It is not yet the polished, feature-complete v1 editor described by the acceptance matrix.
+
+The project originated in [FLUJO issue #367](https://github.com/mario-andreschak/FLUJO/issues/367). That integration epic has been migrated here because the maintainer requested a standalone package rather than a server pre-shipped inside FLUJO.
+
+Remaining v1 work is tracked in [ROADMAP.md](./ROADMAP.md):
+
+- [#1 — timeline editing modes and Studio interactions](https://github.com/flujo-app/mcp-video-studio/issues/1)
+- [#2 — production audio mixer, automation, and preview/render parity](https://github.com/flujo-app/mcp-video-studio/issues/2)
+- [#3 — generated-content review and fine-grained regeneration](https://github.com/flujo-app/mcp-video-studio/issues/3)
+- [#4 — full animation authoring and presets](https://github.com/flujo-app/mcp-video-studio/issues/4)
+- [#5 — titles, captions, effects, QC, export, and project archives](https://github.com/flujo-app/mcp-video-studio/issues/5)
+- [#6 — hardening, accessibility, packaging, and v1 acceptance](https://github.com/flujo-app/mcp-video-studio/issues/6)
+
 ## What works
 
 - Human Studio served as an MCP App: project/media bin with generated tiles, revision-keyed program preview and transport, draggable/snapping multi-track timeline, pointer and keyboard trim/move, tracks, playhead, split/delete, transform/audio/effect inspector, undo/redo, export, and live jobs.
@@ -20,7 +35,7 @@ This repository is intentionally standalone. It does not ship inside FLUJO and d
 - Direct OpenAI-compatible and ElevenLabs provider adapters. Product-critical generation does not depend on MCP Sampling; provider secrets stay server-side.
 - stdio and Streamable HTTP MCP transports. Large media stays behind a tokenized, range-enabled loopback gateway instead of being base64-encoded through MCP.
 
-The detailed architecture and phased feature targets are in [TECHNICAL_PLAN.md](./TECHNICAL_PLAN.md).
+The implementation sequence and current gaps are in [ROADMAP.md](./ROADMAP.md). The architecture, invariants, feature-completeness matrix, and v1 acceptance gates are in [TECHNICAL_PLAN.md](./TECHNICAL_PLAN.md).
 
 ## Requirements
 

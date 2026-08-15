@@ -1,8 +1,25 @@
-# Standalone MCP Video Studio: technical implementation plan
+# Standalone MCP Video Studio: technical plan and implementation record
 
-Status: proposed implementation plan for [FLUJO issue #367](https://github.com/mario-andreschak/FLUJO/issues/367), revised around the maintainer's [re-plan comment](https://github.com/mario-andreschak/FLUJO/issues/367#issuecomment-5288520481).
+Status: active architecture and v1 acceptance plan for [`flujo-app/mcp-video-studio`](https://github.com/flujo-app/mcp-video-studio). It originated in [FLUJO issue #367](https://github.com/mario-andreschak/FLUJO/issues/367) and follows the maintainer's [standalone full-editor re-plan](https://github.com/mario-andreschak/FLUJO/issues/367#issuecomment-5288520481). Implementation progress and open work are maintained in [ROADMAP.md](./ROADMAP.md).
 
-Target repository: `C:\Users\Moe\Documents\GitHub\mcp-video-studio`.
+Canonical repository: [`flujo-app/mcp-video-studio`](https://github.com/flujo-app/mcp-video-studio).
+
+## Implementation progress — 2026-08-15
+
+Release [`0.1.1`](https://www.npmjs.com/package/mcp-video-studio) is a published and runnable pre-v1 vertical slice. It proves the shared project/command/render architecture across both Studio and MCP, but it does not yet satisfy every v1 feature and acceptance gate below.
+
+| Area | Status | Evidence in 0.1.1 | Remaining owner |
+| --- | --- | --- | --- |
+| Standalone delivery | Delivered foundation | npm package, independent repository, stdio + Streamable HTTP, MCP App gateway, Windows/Ubuntu CI and release helper | Release/platform hardening in [#6](https://github.com/flujo-app/mcp-video-studio/issues/6) |
+| Project/media lifecycle | Substantial | Exact timebase, schemas/migration, atomic writes, revisions, durable undo/redo/jobs, managed/linked media, dedupe, artifacts and byte-range gateway | Failure/security/resource hardening in [#6](https://github.com/flujo-app/mcp-video-studio/issues/6) |
+| Timeline and human editor | Partial | Multi-track add/move/trim/split/delete, transitions, captions, markers/automation documents, snapping timeline, inspectors, preview and export | Advanced edit modes and complete Studio interactions in [#1](https://github.com/flujo-app/mcp-video-studio/issues/1) |
+| Render and QC | Substantial | Direct FFmpeg argv execution, compositing/mixing, cache, preview, H.264/AAC + FFV1, atomic export, provenance and full-decode QC | Effects/QC/export breadth in [#5](https://github.com/flujo-app/mcp-video-studio/issues/5); fault/parity gates in [#6](https://github.com/flujo-app/mcp-video-studio/issues/6) |
+| Production audio | Partial | Gain/pan/fades, mute/solo render semantics, effects/EQ foundation, playback rate, waveforms and loudness QC | Mixer, compiled range automation, ducking, effects, stretch/pitch and parity in [#2](https://github.com/flujo-app/mcp-video-studio/issues/2) |
+| Animation engine | Partial | Declarative tick evaluator, deterministic operations/easing, sandboxed HTML frame hook, exact-frame headless capture and timeline integration | Full authoring UI, granular operations, templates and parity/security in [#4](https://github.com/flujo-app/mcp-video-studio/issues/4) |
+| Generated content | Functional foundation | Direct OpenAI-compatible/ElevenLabs adapters; narration/music/caption/animation jobs; immutable lineage; draft/review/activate lifecycle that preserves edits | A/B and ranged review/regeneration, provider UX and transcript correction in [#3](https://github.com/flujo-app/mcp-video-studio/issues/3) |
+| Product polish/v1 proof | Early | Core unit and real FFmpeg/Chromium integration coverage; browser-accepted generation center | Accessibility, long-project, human/model benchmark, clean-install and resilience gates in [#6](https://github.com/flujo-app/mcp-video-studio/issues/6) |
+
+The phase sections below remain the architectural decomposition and exit gates. Their live completion status is summarized in [ROADMAP.md](./ROADMAP.md); GitHub issues are the source of truth for unfinished executable scope.
 
 ## Source-of-truth scope
 
@@ -592,6 +609,8 @@ Internal packages remain private. The root release bundles compiled server code,
 
 ## Phase 0 — foundation and executable specifications
 
+Implementation status in 0.1.1: **substantial**. The standalone package, workspace boundaries, schemas, exact clock, doctor, direct process execution, CI, build, and release helper exist. Clean-package host matrices and deeper failure/capability coverage remain in [#6](https://github.com/flujo-app/mcp-video-studio/issues/6).
+
 ### Work
 
 1. Initialize the standalone repository, CI, formatting, lint, typecheck, test, build, pack, and release checks.
@@ -610,6 +629,8 @@ Internal packages remain private. The root release bundles compiled server code,
 - The package remains entirely standalone; no FLUJO source file changes.
 
 ## Phase 1 — project store and media foundation
+
+Implementation status in 0.1.1: **substantial**. Portable projects, revision conflicts, atomic persistence, durable history/jobs, managed and linked media, relink/consolidate/status operations, normalized probing, derivatives, caching, and authenticated byte ranges exist. Fault injection, symlink/out-of-disk policy proof, and recovery hardening remain in [#6](https://github.com/flujo-app/mcp-video-studio/issues/6).
 
 ### Work
 
@@ -636,6 +657,8 @@ Internal packages remain private. The root release bundles compiled server code,
 - A project can safely import/relink media, generate viewable proxies/thumbnails/waveforms, survive restart/crash tests, and expose durable job state.
 
 ## Phase 2 — mid-level multi-track editing core
+
+Implementation status in 0.1.1: **partial**. The typed command bus covers core tracks, clips, transitions, captions, markers, automation documents, group/link metadata, effects, transactions, and basic insert/overwrite/ripple behavior. Advanced edit algebra and full Studio exposure remain in [#1](https://github.com/flujo-app/mcp-video-studio/issues/1).
 
 ### Work
 
@@ -664,6 +687,8 @@ Internal packages remain private. The root release bundles compiled server code,
 
 ## Phase 3 — first complete render vertical slice
 
+Implementation status in 0.1.1: **substantial**. Multi-track FFmpeg video/audio rendering, transitions, semantic cache reuse, revision-keyed preview, H.264/AAC and FFV1 presets, atomic export, provenance, cancellation, and full-decode QC form a working vertical slice. Broader formats/QC/effects are tracked in [#5](https://github.com/flujo-app/mcp-video-studio/issues/5), with resilience and parity gates in [#6](https://github.com/flujo-app/mcp-video-studio/issues/6).
+
 ### Work
 
 1. Implement render DAG planning, cache lookup/publication, temp outputs, post-render validation, and atomic export.
@@ -689,6 +714,8 @@ Internal packages remain private. The root release bundles compiled server code,
 - A multi-track project can be edited through Phase 2 commands and rendered to a correct deliverable without a raw filtergraph or shell.
 
 ## Phase 4 — full human editor shell and core interactions
+
+Implementation status in 0.1.1: **partial**. Studio is a real editor with project/media management, preview transport, a snapping multi-track timeline, pointer and keyboard move/trim, split/delete, inspectors, jobs, generation review, undo/redo, QC, and export. Full NLE interactions, virtualization, monitor controls, accessibility, and conflict-reapply polish remain in [#1](https://github.com/flujo-app/mcp-video-studio/issues/1) and [#6](https://github.com/flujo-app/mcp-video-studio/issues/6).
 
 This phase makes direct human editing a primary product surface, not a viewer added after the server.
 
@@ -731,6 +758,8 @@ This phase makes direct human editing a primary product surface, not a viewer ad
 
 ## Phase 5 — production audio editing and mixing
 
+Implementation status in 0.1.1: **partial**. Audio clips/tracks, waveforms, gain, pan, fades, mute/solo render semantics, playback rate, basic EQ/filter/dynamics, mixing, and loudness QC exist. Range automation compilation/editing, ducking, a mixer/meters, the full effect set, pitch-preserving stretch, and preview/render parity remain in [#2](https://github.com/flujo-app/mcp-video-studio/issues/2).
+
 ### Work
 
 1. Add custom audio import, dedicated audio tracks, clip/track mute/solo, gain, pan, fades, channel mapping, waveform editing, and peak/RMS/LUFS meters.
@@ -755,6 +784,8 @@ This phase makes direct human editing a primary product surface, not a viewer ad
 - A human or agent can perform the requested custom-audio, levels, EQ, effects, time-stretch, ducking, mix, and loudness workflow without an external DAW for normal video production.
 
 ## Phase 6 — low-level animation engine
+
+Implementation status in 0.1.1: **partial**. The deterministic declarative evaluator, easing/operation model, sandboxed HTML frame protocol, exact-frame headless capture, cache, timeline integration, and generated-version lifecycle exist. The complete human authoring surface, fine-grained operations, template library, parity suite, and sandbox audit remain in [#4](https://github.com/flujo-app/mcp-video-studio/issues/4).
 
 ### Work
 
@@ -781,6 +812,8 @@ This phase makes direct human editing a primary product surface, not a viewer ad
 
 ## Phase 7 — effects, titles, captions, QC, and editor completeness
 
+Implementation status in 0.1.1: **partial**. Initial video/audio effects, transitions, editable caption cues and burn-in, H.264/AAC export, provenance, and baseline QC exist. Rich titles/fonts/subtitle interchange, broader effects, evidence-linked QC, additional exports, and project archives remain in [#5](https://github.com/flujo-app/mcp-video-studio/issues/5).
+
 ### Work
 
 1. Complete the initial video/transition/audio registries and property inspectors.
@@ -797,6 +830,8 @@ This phase makes direct human editing a primary product surface, not a viewer ad
 - The feature-completeness matrix below is implemented, tested, documented, and usable through both App and MCP command layers.
 
 ## Phase 8 — hardening and standalone release
+
+Implementation status in 0.1.1: **early**. Windows/Ubuntu CI, npm release automation, bounded jobs/logs/cache, cancellation, secret redaction, and real FFmpeg/Chromium integration tests exist. Platform, fault, security, performance, accessibility, packaging, and acceptance-production proof remain the release gate in [#6](https://github.com/flujo-app/mcp-video-studio/issues/6).
 
 ### Work
 
@@ -888,17 +923,9 @@ This phase makes direct human editing a primary product surface, not a viewer ad
 
 ## Rollout
 
-The phases should be released as pre-1.0 standalone versions so real editing feedback arrives early without calling an incomplete slice “full feature”:
+The project ships pre-1.0 standalone versions so real editing feedback arrives early without calling an incomplete slice “full feature.” Release `0.1.1` deliberately delivered a cross-phase vertical slice: foundation, project/media persistence, core timeline commands, a usable human editor, render/QC, the first audio/effect path, deterministic animation, and generated-content lifecycle all work together.
 
-- `0.1`: foundation, doctor, project/media foundation;
-- `0.2`: mid-level timeline command API;
-- `0.3`: first end-to-end render slice;
-- `0.4`: human MCP App core editor;
-- `0.5`: production audio;
-- `0.6`: animation engine;
-- `0.7`: effects/titles/captions/QC completeness;
-- `0.9`: hardened release candidate;
-- `1.0`: feature matrix and acceptance productions complete.
+Subsequent pre-1.0 releases close the issue-backed workstreams in [ROADMAP.md](./ROADMAP.md) rather than pretending the architectural phases must land as isolated version numbers. `1.0.0` remains reserved for the complete feature matrix and acceptance productions below.
 
 Each release keeps schema migrations forward-compatible and records the minimum reader version. No phase modifies FLUJO to preinstall the package; users install it as an ordinary external MCP server throughout.
 
