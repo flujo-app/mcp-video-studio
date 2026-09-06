@@ -3,7 +3,7 @@ export interface AnimationFrame {width:number;height:number;background:string;se
 export interface AnimationHitRegion {id:string;x:number;y:number;width:number;height:number}
 /** Self-contained so the same painter runs in the editor and isolated export browser. */
 export function createAnimationPainter(canvas:HTMLCanvasElement){
- const context=canvas.getContext("2d");if(!context)throw new Error("A 2D canvas is required.");const ctx=context;
+ const context=canvas.getContext("2d",{willReadFrequently:true});if(!context)throw new Error("A 2D canvas is required.");const ctx=context;
  const assets=new Map<string,Promise<HTMLImageElement|HTMLVideoElement>>();
  const number=(value:unknown,fallback:number)=>typeof value==="number"&&Number.isFinite(value)?value:fallback;
  const color=(value:unknown,fallback:string)=>typeof value==="string"?value:fallback;

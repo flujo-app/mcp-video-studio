@@ -87,7 +87,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): StudioConfig {
 }
 
 export function providerStatus(config: StudioConfig): Record<string, unknown> {
-  const origin = (value: string) => { try { return new URL(value).origin; } catch { return value; } };
+  const origin = (value: string) => { try { return new URL(value).origin; } catch { return "[invalid provider URL]"; } };
   const usable = (value: string, apiKey: string | undefined) => {
     if (apiKey) return true;
     try { return !["api.openai.com", "api.elevenlabs.io"].includes(new URL(value).hostname.toLowerCase()); } catch { return false; }

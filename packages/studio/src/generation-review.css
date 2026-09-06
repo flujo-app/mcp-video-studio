@@ -1,0 +1,18 @@
+.generated-card button {
+  background: #202a38;
+  color: #f1f5fa;
+  border: 1px solid #58677b;
+  border-radius: 6px;
+  padding: 7px 10px;
+  margin: 3px;
+}
+.generated-card button:hover:not(:disabled) {
+  background: #304158;
+}
+.generated-card button:disabled {
+  opacity: 0.5;
+}
+.generated-card .version-row {
+  padding: 10px 0;
+  border-top: 1px solid #58677b;
+}

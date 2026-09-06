@@ -30,7 +30,7 @@ export function createMcpServer(runtime: StudioRuntime, gateway: Gateway): McpSe
   const server = new McpServer({ name: "mcp-video-studio", version: manifest.version });
   const projectRevision = { projectPath: z.string().min(1), expectedRevision: z.number().int().nonnegative() };
   const captionStyle = z.object({ fontFamily: z.string().min(1), fontSize: z.number().positive(), color: z.string().min(1), background: z.string().min(1), position: z.enum(["top", "center", "bottom"]), align: z.enum(["left", "center", "right"]) });
-  const generationScope = { ...projectRevision, sequenceId: z.string(), trackId: z.string(), clipId: z.string().optional(), startTick: z.number().int().nonnegative(), durationTick: z.number().int().positive(), name: z.string().min(1) };
+  const generationScope = { ...projectRevision, autoActivate: z.boolean().optional(), sequenceId: z.string(), trackId: z.string(), clipId: z.string().optional(), startTick: z.number().int().nonnegative(), durationTick: z.number().int().positive(), name: z.string().min(1) };
   const requestPatch = z.object({ provider: z.string(), model: z.string(), prompt: z.string(), text: z.string(), voiceId: z.string(), language: z.string(), sourceMediaId: z.string(), seed: z.number().int(), outputFormat: z.string(), parameters: z.record(z.string(), z.unknown()) }).partial();
 
   server.registerTool( "open_studio", {
@@ -268,7 +268,7 @@ export function createMcpServer(runtime: StudioRuntime, gateway: Gateway): McpSe
   }, async ({ projectPath }) => invoke(() => runtime.listGeneratedArtifacts(projectPath)));
 
   server.registerTool("generate_narration", {
-    description: "Queue versioned narration generation and bind the first draft to an audio clip. Later versions preserve the clip's timing, effects, and mix settings until explicitly activated.",
+    description: "Queue a narration draft for explicit review. autoActivate is opt-in. Audio is padded or trimmed to the requested slot; existing clip edits are preserved.",
     inputSchema: z.object({ ...generationScope, text: z.string().min(1), provider: z.enum(["openai", "elevenlabs"]), model: z.string().optional(), voiceId: z.string().optional(), language: z.string().optional(), seed: z.number().int().optional(), parameters: z.record(z.string(), z.unknown()).optional() }),
     annotations: { destructiveHint: true, openWorldHint: true }
   }, async ({ clipId, model, voiceId, language, seed, parameters, ...input }) => invoke(() => runtime.generateNarration({ ...input, ...(clipId ? { clipId } : {}), ...(model ? { model } : {}), ...(voiceId ? { voiceId } : {}), ...(language ? { language } : {}), ...(seed !== undefined ? { seed } : {}), ...(parameters ? { parameters } : {}) })));
@@ -286,14 +286,14 @@ export function createMcpServer(runtime: StudioRuntime, gateway: Gateway): McpSe
   }, async ({ clipId: _clipId, model, language, parameters, ...input }) => invoke(() => runtime.generateCaptions({ ...input, ...(model ? { model } : {}), ...(language ? { language } : {}), ...(parameters ? { parameters } : {}) })));
 
   server.registerTool("generate_animation", {
-    description: "Use the configured OpenAI-compatible language provider to create a validated declarative animation draft and bind its first version to the timeline.",
+    description: "Create a validated declarative animation draft. Timeline activation requires review unless autoActivate is explicitly true.",
     inputSchema: z.object({ ...generationScope, prompt: z.string().min(1), model: z.string().optional(), seed: z.number().int().optional(), parameters: z.record(z.string(), z.unknown()).optional() }),
     annotations: { destructiveHint: true, openWorldHint: true }
   }, async ({ clipId, model, seed, parameters, ...input }) => invoke(() => runtime.generateAnimation({ ...input, ...(clipId ? { clipId } : {}), ...(model ? { model } : {}), ...(seed !== undefined ? { seed } : {}), ...(parameters ? { parameters } : {}) })));
 
   server.registerTool("regenerate_generated_artifact", {
-    description: "Create a child draft from an existing generated artifact, optionally replacing only prompt/text/voice/provider/model parameters. The active timeline version is unchanged until review.",
-    inputSchema: z.object({ ...projectRevision, artifactId: z.string(), requestPatch: requestPatch.optional() }),
+    description: "Regenerate all or a bounded relative region of a completed version. Persist unchanged source segments and timeline edits. Draft until review; autoActivate requires explicit opt-in.",
+    inputSchema: z.object({ ...projectRevision, artifactId: z.string(), requestPatch: requestPatch.optional(), parentVersionId: z.string().optional(), autoActivate: z.boolean().optional(), region: z.object({offsetTick:z.number().int().nonnegative(),durationTick:z.number().int().positive()}).optional() }),
     annotations: { destructiveHint: true, openWorldHint: true }
   }, async ({ requestPatch: patch, ...input }) => invoke(() => runtime.regenerateGeneratedArtifact({ ...input, ...(patch ? { requestPatch: patch as Partial<GenerationRequest> } : {}) })));
 

@@ -1,3 +1,4 @@
+import { activateGenerated } from "./generation.js";
 import { randomUUID } from "node:crypto";
 import type { Clip, ProjectCommand, ProjectDelta, Sequence, StudioProject, Track } from "@mcp-video-studio/contracts";
 import { rational } from "@mcp-video-studio/contracts";
@@ -153,32 +154,7 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       if (!version) throw new StudioException("GENERATION_VERSION_NOT_FOUND", `Generated version not found: ${command.versionId}`, "input");
       if (!version.output) throw new StudioException("GENERATION_OUTPUT_MISSING", `Generated version ${command.versionId} has no output.`, "input");
       const sequence = sequenceById(next, artifact.scope.sequenceId);
-      const prior = artifact.activeVersionId ? artifact.versions.find((item) => item.id === artifact.activeVersionId) : undefined;
-      if (version.output.mediaId || version.output.animationId) {
-        if (!artifact.scope.clipId) throw new StudioException("GENERATION_CLIP_MISSING", "This generated artifact is not bound to a timeline clip.", "input");
-        const clip = clipById(sequence, artifact.scope.clipId);
-        assertUnlocked(sequence, clip.trackId);
-        if (version.output.mediaId) {
-          if (!next.media.some((item) => item.id === version.output!.mediaId)) throw new StudioException("MISSING_MEDIA", `Generated media not found: ${version.output.mediaId}`, "input");
-          clip.source = { type: "media", mediaId: version.output.mediaId };
-        } else if (version.output.animationId) {
-          if (!next.animations.some((item) => item.id === version.output!.animationId)) throw new StudioException("MISSING_ANIMATION", `Generated animation not found: ${version.output.animationId}`, "input");
-          clip.source = { type: "animation", animationId: version.output.animationId };
-        }
-        addUnique(changed.clips, clip.id);
-      }
-      if (version.output.captions) {
-        const priorIds = new Set(prior?.output?.captions?.map((caption) => caption.id) ?? []);
-        sequence.captions = sequence.captions.filter((caption) => !priorIds.has(caption.id));
-        const existing = new Set(sequence.captions.map((caption) => caption.id));
-        for (const caption of version.output.captions) {
-          if (existing.has(caption.id)) throw new StudioException("DUPLICATE_ID", `Caption id already exists: ${caption.id}`, "input");
-          sequence.captions.push(structuredClone(caption));
-        }
-        addUnique(changed.sequences, sequence.id);
-      }
-      artifact.activeVersionId = version.id;
-      addUnique(changed.generatedArtifacts, artifact.id);
+      activateGenerated(next, artifact, version, sequence, changed);
       sortSequence(sequence);
       continue;
     }
@@ -375,10 +351,16 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
   for (const artifact of next.generatedArtifacts) {
     const sequence = next.sequences.find(item=>item.id===artifact.scope.sequenceId);
     if(artifact.scope.trackId&&!sequence?.tracks.some(track=>track.id===artifact.scope.trackId))delete artifact.scope.trackId;
+    if(artifact.clipBindings){
+      artifact.clipBindings=artifact.clipBindings.filter(binding=>sequence?.clips.some(clip=>clip.id===binding.clipId));
+      if(artifact.clipBindings.length){artifact.scope.clipId=artifact.clipBindings[0]!.clipId;}
+      else {delete artifact.clipBindings;delete artifact.scope.clipId;delete artifact.activeVersionId;}
+      continue;
+    }
     if (artifact.scope.clipId) {
       const clip=sequence?.clips.find(item=>item.id===artifact.scope.clipId);
       if (clip) { artifact.scope.startTick=clip.startTick;artifact.scope.durationTick=clip.durationTick;artifact.scope.trackId=clip.trackId; }
-      else { delete artifact.scope.clipId;delete artifact.activeVersionId; }
+      else if(artifact.activeVersionId) { delete artifact.scope.clipId;delete artifact.activeVersionId; }
     }
   }
   return { project: next, changed, warnings };

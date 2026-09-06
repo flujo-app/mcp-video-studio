@@ -252,7 +252,16 @@ export interface GenerationProvenance {
   requestId?: string;
 }
 
+export interface GeneratedSegment {
+  offsetTick: number;
+  durationTick: number;
+  source: { type: "media"; mediaId: UUID } | { type: "animation"; animationId: UUID };
+  sourceInTick: number;
+}
+
 export interface GeneratedArtifactOutput {
+  /** Complete composition; each region keeps its original source and offset. */
+  segments?: GeneratedSegment[];
   mediaId?: UUID;
   animationId?: UUID;
   captions?: CaptionCue[];
@@ -265,6 +274,9 @@ export interface GenerationReview {
 }
 
 export interface GeneratedArtifactVersion {
+  /** Region is relative to artifact.scope, not to the current playhead. */
+  region?: { offsetTick: number; durationTick: number };
+  autoActivate?: boolean;
   id: UUID;
   parentVersionId?: UUID;
   status: GeneratedVersionStatus;
@@ -277,6 +289,8 @@ export interface GeneratedArtifactVersion {
 }
 
 export interface GeneratedArtifact {
+  /** Persisted ownership of split clips; unrelated timeline clips are never replaced. */
+  clipBindings?: Array<{ clipId: UUID; offsetTick: number; durationTick: number }>;
   id: UUID;
   kind: GeneratedArtifactKind;
   name: string;

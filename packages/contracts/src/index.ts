@@ -6,3 +6,5 @@ export * from "./defaults.js";
 export * from "./captions.js";
 
 export * from "./animation.js";
+
+export * from "./generation.js";

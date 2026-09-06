@@ -1,4 +1,5 @@
 import {SequenceTools} from "./sequence-tools.js";
+import {GenerationReview} from "./generation-review.js";
 import {AnimationEditor} from "./animation-editor.js";
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
@@ -483,13 +484,14 @@ function GenerationCenter({ project, projectPath, sequence, playhead, onProject,
   const [sourceMediaId, setSourceMediaId] = useState(project.media.find((media) => media.probe.hasAudio)?.id ?? "");
   const [providers, setProviders] = useState<Record<string, { configured?: boolean; model?: string; capabilities?: string[] }>>({});
   const [busy, setBusy] = useState(false);
+  const [autoActivate,setAutoActivate]=useState(false);
   useEffect(() => { void api<{ providers: typeof providers }>("/api/providers").then((result) => setProviders(result.providers)); }, []);
   useEffect(() => { setName(kind === "narration" ? "Narration" : kind === "music" ? "Music bed" : kind === "captions" ? "Captions" : "Generated animation"); }, [kind]);
   const generate = async () => {
     const track = sequence.tracks.find((item) => kind === "captions" ? item.type === "caption" : kind === "animation" ? item.type === "overlay" || item.type === "video" : item.type === "audio");
     if (!track) { onError(`Add a ${kind === "animation" ? "video or overlay" : kind === "captions" ? "caption" : "audio"} track first.`); return; }
     const durationTick = kind === "narration" || kind === "music" ? secondsToTicks(Math.max(0.1, duration)) : framesToTicks(Math.max(1, ticksToFrames(secondsToTicks(Math.max(0.1, duration)), project.settings.fps, "round")), project.settings.fps);
-    const body = { projectPath, expectedRevision: project.revision, kind, sequenceId: sequence.id, trackId: track.id, startTick: playhead, durationTick, name, prompt, text: prompt, provider, voiceId, sourceMediaId };
+    const body = { autoActivate, projectPath, expectedRevision: project.revision, kind, sequenceId: sequence.id, trackId: track.id, startTick: playhead, durationTick, name, prompt, text: prompt, provider, voiceId, sourceMediaId };
     setBusy(true);
     try {
       const result = await api<{ project: StudioProject }>("/api/generate", { method: "POST", body: JSON.stringify(body) });
@@ -497,8 +499,8 @@ function GenerationCenter({ project, projectPath, sequence, playhead, onProject,
     } catch (caught) { onError(caught instanceof Error ? caught.message : String(caught)); }
     finally { setBusy(false); }
   };
-  return <div className="modal-backdrop generation-backdrop"><div className="generation-modal">
-    <div className="modal-head"><div><p className="eyebrow">GENERATED CONTENT</p><h1>Review, revise, and regenerate</h1><p className="generation-subtitle">Every request becomes a persistent version. Activating a new version preserves timeline timing, effects, and mix edits.</p></div><button className="close" aria-label="Close dialog" onClick={onClose}>×</button></div>
+  return <div className="modal-backdrop generation-backdrop"><div className="generation-modal" role="dialog" aria-modal="true" aria-labelledby="generation-dialog-title">
+    <div className="modal-head"><div><p className="eyebrow">GENERATED CONTENT</p><h1 id="generation-dialog-title">Review, revise, and regenerate</h1><p className="generation-subtitle">Every request becomes a persistent version. Activating a new version preserves timeline timing, effects, and mix edits.</p></div><button className="close" aria-label="Close dialog" onClick={onClose}>×</button></div>
     <div className="provider-strip">{Object.entries(providers).map(([id, status]) => <span key={id} className={status.configured ? "configured" : "missing"}><i />{id} · {status.configured ? "ready" : "not configured"}</span>)}</div>
     <div className="generation-layout">
       <section className="generation-create"><h3>New draft at {formatTimecode(playhead, project.settings.fps)}</h3>
@@ -509,45 +511,12 @@ function GenerationCenter({ project, projectPath, sequence, playhead, onProject,
         {kind !== "music" && kind !== "animation" && <label>Provider<select value={provider} onChange={(event) => setProvider(event.currentTarget.value as "openai" | "elevenlabs")}><option value="elevenlabs">ElevenLabs</option><option value="openai">OpenAI-compatible</option></select></label>}
         {kind === "narration" && <label>Voice ID <small>(optional/default)</small><input value={voiceId} onChange={(event) => setVoiceId(event.currentTarget.value)} /></label>}
         <label>Timeline slot <output>{duration.toFixed(1)}s</output><input type="range" min="1" max="60" step="0.5" value={duration} onChange={(event) => setDuration(Number(event.currentTarget.value))} /></label>
+        <label><input type="checkbox" checked={autoActivate} onChange={event=>setAutoActivate(event.currentTarget.checked)}/>Automatically activate when ready</label><p>Generated audio is padded or trimmed to this slot. Drafts wait for review unless selected.</p>
         <button className="primary large" disabled={busy || !name.trim() || (kind !== "captions" && !prompt.trim()) || (kind === "captions" && !sourceMediaId)} onClick={() => void generate()}>{busy ? "Queueing…" : "Generate draft"}</button>
       </section>
-      <section className="generation-library"><div className="generation-heading"><h3>Project artifacts</h3><span>{project.generatedArtifacts.length}</span></div>{project.generatedArtifacts.length ? project.generatedArtifacts.map((artifact) => <GeneratedArtifactCard key={artifact.id} artifact={artifact} project={project} projectPath={projectPath} onProject={onProject} onError={onError} />) : <div className="empty-panel"><span>✦</span><p>No generated artifacts yet. Imported recordings remain supported as normal media.</p></div>}</section>
+      <section className="generation-library"><div className="generation-heading"><h3>Project artifacts</h3><span>{project.generatedArtifacts.length}</span></div>{project.generatedArtifacts.length ? project.generatedArtifacts.map((artifact) => <GenerationReview key={artifact.id} artifact={artifact} project={project} projectPath={projectPath} request={api} mediaUrl={id=>mediaArtifactUrl(projectPath,id,"source")} onProject={onProject} onError={onError} />) : <div className="empty-panel"><span>✦</span><p>No generated artifacts yet. Imported recordings remain supported as normal media.</p></div>}</section>
     </div>
   </div></div>;
-}
-
-function GeneratedArtifactCard({ artifact, project, projectPath, onProject, onError }: { artifact: GeneratedArtifact; project: StudioProject; projectPath: string; onProject(project: StudioProject): void; onError(message: string): void }) {
-  const active = artifact.versions.find((version) => version.id === artifact.activeVersionId) ?? artifact.versions.at(-1)!;
-  const source = active.request.text ?? active.request.prompt ?? "";
-  const [revisionText, setRevisionText] = useState(source);
-  const [note, setNote] = useState("");
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { setRevisionText(source); }, [active.id, source]);
-  const regenerate = async () => {
-    setBusy(true);
-    try {
-      const requestPatch: Partial<GenerationRequest> = active.request.text !== undefined ? { text: revisionText } : active.request.prompt !== undefined ? { prompt: revisionText } : {};
-      const result = await api<{ project: StudioProject }>("/api/generated/regenerate", { method: "POST", body: JSON.stringify({ projectPath, expectedRevision: project.revision, artifactId: artifact.id, requestPatch }) });
-      onProject(result.project);
-    } catch (caught) { onError(caught instanceof Error ? caught.message : String(caught)); }
-    finally { setBusy(false); }
-  };
-  const review = async (versionId: string, action: "activate" | "approve" | "reject") => {
-    setBusy(true);
-    try {
-      const result = await api<{ project: StudioProject }>("/api/generated/review", { method: "POST", body: JSON.stringify({ projectPath, expectedRevision: project.revision, artifactId: artifact.id, versionId, action, reviewer: "Studio user", note }) });
-      onProject(result.project); setNote("");
-    } catch (caught) { onError(caught instanceof Error ? caught.message : String(caught)); }
-    finally { setBusy(false); }
-  };
-  return <article className="generated-card"><header><span className={`kind-badge ${artifact.kind}`}>{artifact.kind}</span><div><strong>{artifact.name}</strong><small>{secondsLabel(artifact.scope.startTick)} · {secondsLabel(artifact.scope.durationTick)} slot</small></div><em>{artifact.versions.length} version{artifact.versions.length === 1 ? "" : "s"}</em></header>
-    {(active.request.text !== undefined || active.request.prompt !== undefined) && <label>Revise and regenerate<textarea rows={3} value={revisionText} onChange={(event) => setRevisionText(event.currentTarget.value)} /></label>}
-    <div className="generated-actions"><button onClick={() => void regenerate()} disabled={busy}>↻ Regenerate</button><input value={note} onChange={(event) => setNote(event.currentTarget.value)} placeholder="Review note (optional)" /></div>
-    <div className="version-list">{[...artifact.versions].reverse().map((version) => {
-      const mediaId = version.output?.mediaId;
-      return <div className={`version-row ${version.status}`} key={version.id}><div className="version-meta"><strong>{version.status}</strong><span>{version.provenance.provider} · {version.provenance.model}</span><small>{new Date(version.createdAt).toLocaleString()} · {version.id.slice(0, 8)}{artifact.activeVersionId === version.id ? " · ACTIVE" : ""}{artifact.approvedVersionId === version.id ? " · APPROVED" : ""}</small></div>{mediaId && <audio controls preload="none" src={mediaArtifactUrl(projectPath, mediaId, "source")} />}{version.error && <p className="version-error">{version.error.message}</p>}<div className="version-buttons">{version.output && artifact.activeVersionId !== version.id && <button disabled={busy} onClick={() => void review(version.id, "activate")}>Activate</button>}{version.output && artifact.approvedVersionId !== version.id && <button disabled={busy} onClick={() => void review(version.id, "approve")}>Approve</button>}{version.status !== "rejected" && version.status !== "failed" && <button disabled={busy} onClick={() => void review(version.id, "reject")}>Reject</button>}</div></div>;
-    })}</div>
-  </article>;
 }
 
 function Inspector({ project, sequence, clip, jobs, projectPath, onUpdate, onMutate, onError,onNavigate }: { project: StudioProject | undefined; sequence: Sequence | undefined; clip: Clip | undefined; jobs: JobRecord[]; projectPath: string; onNavigate(tick:number,clipIds:string[]):void; onUpdate(command: ProjectCommand & { type: "clip.update" }): void; onMutate(commands: ProjectCommand[]): Promise<void>; onError(error: string): void }) {

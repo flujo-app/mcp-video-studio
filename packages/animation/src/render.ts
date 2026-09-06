@@ -10,7 +10,7 @@ import { animationProblems } from "@mcp-video-studio/contracts";
 import { createAnimationPainter } from "./painter.js";
 import { evaluateAnimation } from "./evaluate.js";
 
-export const ANIMATION_RENDERER_VERSION=4;
+export const ANIMATION_RENDERER_VERSION=5;
 
 const RENDERER_HTML = '<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:transparent}canvas{display:block}</style></head><body><canvas id="canvas"></canvas><script>window.__applyState=('+createAnimationPainter.toString()+')(document.getElementById("canvas"));</script></body></html>';
 
@@ -31,7 +31,7 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
   const scratch = path.join(config.scratchDir, `animation-${randomUUID()}`);
   const frames = path.join(scratch, "frames");
   await mkdir(frames, { recursive: true });
-  const browser = await chromium.launch({ headless: true, env: browserEnvironment() }).catch(async error=>{await rm(scratch,{recursive:true,force:true}).catch(()=>undefined);throw error;});
+  const browser = await chromium.launch({ headless: true, args:["--disable-accelerated-2d-canvas","--disable-accelerated-video-decode"], env: browserEnvironment() }).catch(async error=>{await rm(scratch,{recursive:true,force:true}).catch(()=>undefined);throw error;});
   const startupFailure=async(error:unknown):Promise<never>=>{await browser.close().catch(()=>undefined);await rm(scratch,{recursive:true,force:true}).catch(()=>undefined);throw error;};
   const context = await browser.newContext({ serviceWorkers: "block", acceptDownloads: false, viewport: { width: document.canvas.width, height: document.canvas.height }, deviceScaleFactor: 1 }).catch(startupFailure);
   const page = await context.newPage().catch(startupFailure);

@@ -14,7 +14,8 @@
     "LICENSE",
     "REMEDIATION.md",
     "ROADMAP.md",
-    "TECHNICAL_PLAN.md"
+    "TECHNICAL_PLAN.md",
+    "GENERATION.md"
   ],
   "workspaces": [
     "packages/*"

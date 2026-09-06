@@ -147,16 +147,19 @@ const generatedArtifactSchema = z.object({
     trackId: id.optional(),
     clipId: id.optional()
   }),
+  clipBindings: z.array(z.object({ clipId: id, offsetTick: safeInteger.nonnegative(), durationTick: positiveTick })).max(1024).optional(),
   activeVersionId: id.optional(),
   approvedVersionId: id.optional(),
   versions: z.array(z.object({
     id,
     parentVersionId: id.optional(),
+    region: z.object({ offsetTick: safeInteger.nonnegative(), durationTick: positiveTick }).optional(),
+    autoActivate: z.boolean().optional(),
     status: z.enum(["queued", "generating", "draft", "approved", "rejected", "failed", "superseded"]),
     request: generationRequestSchema,
     provenance: z.object({ provider: id, model: z.string().max(300), requestHash: z.string().regex(/^[a-f0-9]{64}$/), sourceRevision: safeInteger.nonnegative(), requestId: z.string().optional() }),
     createdAt: z.string(),
-    output: z.object({ mediaId: id.optional(), animationId: id.optional(), captions: z.array(captionSchema).optional() }).optional(),
+    output: z.object({ segments: z.array(z.object({ offsetTick: safeInteger.nonnegative(), durationTick: positiveTick, sourceInTick: safeInteger.nonnegative(), source: z.discriminatedUnion("type", [z.object({type:z.literal("media"),mediaId:id}),z.object({type:z.literal("animation"),animationId:id})]) })).max(1024).optional(), mediaId: id.optional(), animationId: id.optional(), captions: z.array(captionSchema).optional() }).optional(),
     review: z.object({ reviewer: z.string().min(1).max(300), reviewedAt: z.string(), note: z.string().max(10_000).optional() }).optional(),
     error: z.object({ code: z.string(), message: z.string(), category: z.enum(["input", "conflict", "policy", "runtime", "dependency"]), details: z.record(z.string(), z.unknown()).optional() }).optional()
   })).min(1)

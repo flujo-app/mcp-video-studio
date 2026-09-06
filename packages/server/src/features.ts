@@ -1,3 +1,4 @@
+import {assertSafeGenerationInput,generationSecrets} from "./generation-privacy.js";
 import { createHash, randomUUID } from "node:crypto";
 import { sequenceDuration, ANIMATION_PRESETS, animationPreset, StudioException } from "@mcp-video-studio/core";
 import { defaultTrack, framesToTicks, ticksToFrames, parseCaptions, serializeCaptions, defaultClip, type GeneratedArtifact, type ProjectCommand } from "@mcp-video-studio/contracts";
@@ -20,6 +21,7 @@ function fail(message: string): never { throw new StudioException("INVALID_EDIT"
 
 export async function invokeFeature(runtime: StudioRuntime, name: FeatureName, value: unknown): Promise<Record<string, unknown>> {
   const input = featureSchemas[name].parse(value);
+  if(["adopt_generated_media","annotate_generated_version"].includes(name))assertSafeGenerationInput(input,generationSecrets(runtime.config));
   const project = await runtime.store(input.projectPath).read();
   if(name==="create_sequence"){
     const p=featureSchemas.create_sequence.parse(input),id=randomUUID();
