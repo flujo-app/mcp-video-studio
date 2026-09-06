@@ -8,19 +8,28 @@ export async function atomicWrite(filePath: string, content: string | Uint8Array
   const resolved = path.resolve(filePath);
   await mkdir(path.dirname(resolved), { recursive: true });
   const temporary = path.join(path.dirname(resolved), `.${path.basename(resolved)}.${randomUUID()}.tmp`);
-  const handle = await open(temporary, "wx");
   try {
-    await handle.writeFile(content);
-    await handle.sync();
-  } finally {
-    await handle.close();
-  }
-  try { await rename(temporary, resolved); } finally { await rm(temporary, { force: true }).catch(() => undefined); }
+    const handle = await open(temporary, "wx");
+    try { await handle.writeFile(content); await handle.sync(); }
+    finally { await handle.close(); }
+    await rename(temporary, resolved);
+  } finally { await rm(temporary, { force: true }).catch(() => undefined); }
 }
 
 export async function readJson<T>(filePath: string): Promise<T> {
   try {
-    return JSON.parse(await readFile(filePath, "utf8")) as T;
+    const handle = await open(filePath, "r");
+    try {
+      const limit = 64 * 1024 * 1024, info = await handle.stat();
+      if (!info.isFile() || info.size > limit) throw new Error("JSON document exceeds the 64 MiB file limit.");
+      const chunks: Buffer[] = []; let bytes = 0;
+      for await (const chunk of handle.createReadStream({ autoClose: false })) {
+        bytes += chunk.length;
+        if (bytes > limit) throw new Error("JSON document exceeds the 64 MiB file limit.");
+        chunks.push(chunk);
+      }
+      return JSON.parse(Buffer.concat(chunks).toString("utf8")) as T;
+    } finally { await handle.close(); }
   } catch (error) {
     throw new StudioException("READ_FAILED", `Could not read ${filePath}: ${error instanceof Error ? error.message : String(error)}`, "runtime");
   }

@@ -1,4 +1,4 @@
-import { mkdtemp,readFile,rm,symlink,writeFile } from "node:fs/promises";
+import { mkdtemp,readFile,rm,symlink,writeFile,open } from "node:fs/promises";
 import path from "node:path";import os from "node:os";
 import { afterEach,expect,it,vi } from "vitest";
 const fault=vi.hoisted(()=>({path:""}));
@@ -6,7 +6,7 @@ vi.mock("../packages/core/src/fs.js",async importOriginal=>{
  const actual=await importOriginal<typeof import("../packages/core/src/fs.js")>();
  return {...actual,writeJson:async(file:string,value:unknown)=>{if(fault.path&&file.includes(fault.path))throw Object.assign(new Error("Injected disk full"),{code:"ENOSPC"});return actual.writeJson(file,value);}};
 });
-import { ProjectStore,confinedPath } from "@mcp-video-studio/core";
+import { ProjectStore,confinedPath,readJson } from "@mcp-video-studio/core";
 const roots:string[]=[];afterEach(async()=>{fault.path="";await Promise.all(roots.splice(0).map(root=>rm(root,{recursive:true,force:true})));});
 async function fixture(){const root=await mkdtemp(path.join(os.tmpdir(),"studio-fault-"));roots.push(root);return{root,store:await ProjectStore.create(path.join(root,"project"),"Original")};}
 it("failed history write or project publication never advances canonical revision/undo cursor",async()=>{
@@ -30,4 +30,10 @@ it("rejects path traversal, managed symlink escapes and unsafe IDs before consum
  expect(()=>confinedPath(store.root,path.join(store.root,"assets","escape"))).toThrow();
  await expect(store.replace(0,p=>{p.sequences[0]!.id="../escape";},{sequences:[],tracks:[],clips:[],media:[],animations:[],generatedArtifacts:[]})).rejects.toThrow();
  expect(await readFile(outside,"utf8")).toBe("canary");
+});
+
+it("rejects oversized JSON documents before parsing or allocating their body",async()=>{
+ const {root}=await fixture(),file=path.join(root,"oversized.json");
+ const handle=await open(file,"w");try{await handle.truncate(64*1024*1024+1);}finally{await handle.close();}
+ await expect(readJson(file)).rejects.toThrow("64 MiB");
 });

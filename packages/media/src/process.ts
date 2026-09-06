@@ -117,3 +117,19 @@ export async function runChecked(executable: string, args: string[], options: Pr
   if (result.exitCode !== 0) throw new StudioException("PROCESS_FAILED", `${executable} exited with ${result.exitCode}.`, "runtime", { executable, args, exitCode: result.exitCode, stderr: result.stderr, truncated: result.truncated });
   return result;
 }
+
+const scriptOptions = new Map<string, Promise<string>>();
+/** Select an installed capability; modern FFmpeg removed the legacy script option. */
+export function filterScriptOption(executable: string): Promise<string> {
+  let choice = scriptOptions.get(executable);
+  if (!choice) {
+    choice = runChecked(executable, ["-hide_banner", "-h", "full"], { timeoutMs: 10_000, maxOutputChars: 2_000_000 })
+      .then(result => {
+        const help = result.stdout + result.stderr;
+        if (!help.includes("-filter_complex")) throw new StudioException("FFMPEG_FILTER_SUPPORT", "Installed FFmpeg does not expose complex filter support.", "dependency");
+        return help.includes("-filter_complex_script") ? "-filter_complex_script" : "-/filter_complex";
+      }).catch(error => { scriptOptions.delete(executable); throw error; });
+    scriptOptions.set(executable, choice);
+  }
+  return choice;
+}

@@ -5,7 +5,7 @@ import path from "node:path";
 import { framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import { ProjectStore, sequenceDuration, sha256File, StudioException } from "@mcp-video-studio/core";
 import { renderAnimation } from "@mcp-video-studio/animation";
-import { ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
+import { filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
 import { audioAutomationFilters } from "./automation.js";
 import { atempoChain, audioEffectFilters, clipTransformFilters, videoEffectFilters } from "./filters.js";
 
@@ -345,7 +345,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     const graph = audioOnly ? compiled.graph + `;[${compiled.videoLabel}]nullsink` : compiled.graph;
     await writeFile(graphPath, graph, "utf8");
     const args = [
-      ...inputArgs, "-filter_complex_script", graphPath,
+      ...inputArgs, await filterScriptOption(config.ffmpegPath), graphPath,
       ...(!audioOnly ? ["-map", `[${compiled.videoLabel}]`, "-frames:v", String(compiled.frameCount), "-c:v", preset.videoCodec ?? "libx264"] : []),
       "-map", `[${compiled.audioLabel}]`, "-t", String(ticksToSeconds(compiled.durationTick)),
       ...(preset.videoCodec === "libx264" ? ["-preset", options.encoderPreset ?? "veryfast", "-crf", String(options.crf ?? preset.crf ?? 18)] : []),
