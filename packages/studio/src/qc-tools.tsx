@@ -1,7 +1,7 @@
 import React,{useEffect,useState} from "react";
 import {ticksToSeconds,type JobRecord,type ProjectCommand,type Sequence,type StudioProject} from "@mcp-video-studio/contracts";
-type Check={id:string;status:string;message:string;checkId?:string;startTick?:number;endTick?:number;clipIds?:string[];allowanceId?:string;observed?:Record<string,unknown>};
-type Props={project:StudioProject;sequence:Sequence;jobs:JobRecord[];projectPath:string;request(route:string,input:Record<string,unknown>):Promise<unknown>;onMutate(commands:ProjectCommand[]):Promise<void>;onNavigate(tick:number,clipIds:string[]):void;onError(message:string):void};
+type Check={id:string;status:string;message:string;checkId?:string;startTick?:number;endTick?:number;clipIds?:string[];captionIds?:string[];allowanceId?:string;observed?:Record<string,unknown>};
+type Props={project:StudioProject;sequence:Sequence;jobs:JobRecord[];projectPath:string;request(route:string,input:Record<string,unknown>):Promise<unknown>;onMutate(commands:ProjectCommand[]):Promise<void>;onNavigate(tick:number,clipIds:string[],captionIds?:string[]):void;onError(message:string):void};
 export function QualityControl({project,sequence,jobs,projectPath,request,onMutate,onNavigate,onError}:Props){
  const [filePath,setFilePath]=useState(""),[busy,setBusy]=useState(false),[reason,setReason]=useState("");
  const render=jobs.find(job=>job.type==="render"&&job.status==="completed"&&job.result?.projectId===project.projectId&&job.result?.sequenceId===sequence.id);
@@ -17,7 +17,7 @@ export function QualityControl({project,sequence,jobs,projectPath,request,onMuta
  <label>Intentional range reason<input maxLength={1000} value={reason} onChange={event=>setReason(event.currentTarget.value)}/></label>
  {report&&<p role="status">QC revision {String(report.result?.revision)}{report.result?.revision!==project.revision?" — project changed; analyze again":""}</p>}
  <ol className="qc-checks">{checks.map(check=><li key={check.id} data-qc-check={check.checkId??check.id}><strong>{check.status} {check.checkId??check.id}</strong><p>{check.message}</p>
- {check.startTick!==undefined&&<><button aria-label={"Jump to "+check.id} onClick={()=>onNavigate(check.startTick!,check.clipIds??[])}>{ticksToSeconds(check.startTick).toFixed(3)}–{ticksToSeconds(check.endTick??check.startTick).toFixed(3)}s · Show on timeline</button>
+ {check.startTick!==undefined&&<><button aria-label={"Jump to "+check.id} onClick={()=>onNavigate(check.startTick!,check.clipIds??[],check.captionIds)}>{ticksToSeconds(check.startTick).toFixed(3)}–{ticksToSeconds(check.endTick??check.startTick).toFixed(3)}s · Show on timeline</button>
  {!check.allowanceId&&["video.black","video.freeze","audio.silence"].includes(check.checkId??"")&&<button disabled={!reason.trim()||report?.result?.revision!==project.revision} onClick={()=>allow(check)}>Mark intentional {check.checkId}</button>}</>}
  {check.observed&&<details><summary>Measured values</summary><pre>{JSON.stringify(check.observed,null,2)}</pre></details>}</li>)}</ol>
  {!!sequence.qcAllowances?.length&&<fieldset><legend>Saved intentional ranges</legend>{sequence.qcAllowances.map(item=><div key={item.id}><p>{item.checkId}: {ticksToSeconds(item.startTick).toFixed(3)}–{ticksToSeconds(item.endTick).toFixed(3)}s — {item.reason}</p><button onClick={()=>void onMutate([{type:"qc.allowance.remove",sequenceId:sequence.id,allowanceId:item.id}])}>Remove allowance {item.checkId}</button></div>)}</fieldset>}

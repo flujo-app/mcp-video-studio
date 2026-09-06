@@ -10,7 +10,7 @@ import { animationProblems } from "@mcp-video-studio/contracts";
 import { createAnimationPainter } from "./painter.js";
 import { evaluateAnimation } from "./evaluate.js";
 
-export const ANIMATION_RENDERER_VERSION=6;
+export const ANIMATION_RENDERER_VERSION=7;
 
 const RENDERER_HTML = '<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:transparent}canvas{display:block}</style></head><body><canvas id="canvas"></canvas><script>window.__applyState=('+createAnimationPainter.toString()+')(document.getElementById("canvas"));</script></body></html>';
 
@@ -48,9 +48,12 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
     for (let frame = 0; frame < frameCount; frame += 1) {
       if (options.signal?.aborted) throw new StudioException("CANCELLED", "Animation render was cancelled.", "runtime");
       const tick = frame * perFrame;
+      let declarativePng:string|undefined;
       if (document.mode === "declarative") {
         const state = evaluateAnimation(document, tick);
-        await page.evaluate(async ({nodes,frame}) => { await (window as unknown as {__applyState:(nodes:unknown,frame:unknown)=>Promise<unknown>}).__applyState(nodes,frame); }, {nodes:state,frame:{...document.canvas,seed:document.seed,time:tick/35_280_000}}, false);
+        // Evaluate and capture one completed frame atomically in the painter's main world.
+        // Keep the execution realm consistent and avoid a separate capture boundary.
+        declarativePng=await page.evaluate(async ({nodes,frame}) => { await (window as unknown as {__applyState:(nodes:unknown,frame:unknown)=>Promise<unknown>}).__applyState(nodes,frame);const canvas=globalThis.document.querySelector("canvas");if(!(canvas instanceof HTMLCanvasElement))throw new Error("Animation canvas is missing.");if(canvas.getContext("2d")?.isContextLost())throw new Error("Animation canvas context was lost.");return canvas.toDataURL("image/png"); }, {nodes:state,frame:{...document.canvas,seed:document.seed,time:tick/35_280_000}}, false);
       } else {
         await target.evaluate(async state => {
           const host=window as unknown as {__studioFrame:(time:number,frame:number)=>void;__studioFailure?:string;renderFrame?:(state:unknown)=>unknown};
@@ -63,10 +66,8 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
       }
       const framePath=path.join(frames,String(frame).padStart(8,"0")+".png");
       if(document.mode==="declarative"){
-        // Capture the completed canvas bitmap directly. Browser compositor screenshots can
-        // race transparent GPU surface presentation on macOS even after drawing completes.
-        const png=await page.evaluate(()=>{const canvas=globalThis.document.querySelector("canvas");if(!(canvas instanceof HTMLCanvasElement))throw new Error("Animation canvas is missing.");return canvas.toDataURL("image/png");});
-        await writeFile(framePath,Buffer.from(png.slice("data:image/png;base64,".length),"base64"));
+        if(!declarativePng?.startsWith("data:image/png;base64,"))throw new StudioException("ANIMATION_CAPTURE_FAILED","The completed canvas did not produce a PNG bitmap.","runtime");
+        await writeFile(framePath,Buffer.from(declarativePng.slice("data:image/png;base64,".length),"base64"));
       }else await page.screenshot({path:framePath,type:"png",omitBackground:document.canvas.background==="transparent",animations:"allow",caret:"hide"});
       options.onProgress?.((frame + 1) / (frameCount + 1));
     }

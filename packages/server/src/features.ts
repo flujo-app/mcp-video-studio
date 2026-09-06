@@ -1,3 +1,4 @@
+import {measureCaptionLayout} from "@mcp-video-studio/renderer";
 import {assertSafeGenerationInput,generationSecrets} from "./generation-privacy.js";
 import { createHash, randomUUID } from "node:crypto";
 import { sequenceDuration, ANIMATION_PRESETS, animationPreset, StudioException } from "@mcp-video-studio/core";
@@ -7,6 +8,7 @@ import type { StudioRuntime } from "./runtime.js";
 
 const revision = { projectPath: z.string().min(1), expectedRevision: z.number().int().nonnegative() };
 export const featureSchemas = {
+  inspect_caption_layout:z.object({projectPath:z.string().min(1),sequenceId:z.string().min(1)}),
   create_sequence: z.object({...revision,name:z.string().trim().min(1).max(200),activate:z.boolean().default(true)}),
   insert_nested_sequence: z.object({...revision,sequenceId:z.string(),sourceSequenceId:z.string(),trackId:z.string(),startTick:z.number().int().nonnegative(),mode:z.enum(["insert","overwrite"]).default("insert")}),
   create_animation_preset: z.object({ ...revision, sequenceId: z.string(), trackId: z.string(), startTick: z.number().int().nonnegative(), durationTick: z.number().int().positive(), preset: z.enum(ANIMATION_PRESETS), text: z.string().min(1).max(200) }),
@@ -23,6 +25,7 @@ export async function invokeFeature(runtime: StudioRuntime, name: FeatureName, v
   const input = featureSchemas[name].parse(value);
   if(["adopt_generated_media","annotate_generated_version"].includes(name))assertSafeGenerationInput(input,generationSecrets(runtime.config));
   const project = await runtime.store(input.projectPath).read();
+  if(name==="inspect_caption_layout"){const p=featureSchemas.inspect_caption_layout.parse(input),sequence=project.sequences.find(sequence=>sequence.id===p.sequenceId);if(!sequence)fail("Sequence not found.");return{success:true,projectId:project.projectId,revision:project.revision,sequenceId:sequence.id,...await measureCaptionLayout(runtime.store(p.projectPath),project,sequence,runtime.config)};}
   if(name==="create_sequence"){
     const p=featureSchemas.create_sequence.parse(input),id=randomUUID();
     const sequence={id,name:p.name,tracks:[defaultTrack(id,"video",0),defaultTrack(id,"audio",1),defaultTrack(id,"caption",2,"Captions")],clips:[],transitions:[],automation:[],markers:[],captions:[]};

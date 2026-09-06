@@ -27,7 +27,7 @@ describe("FFmpeg render integration", () => {
       const captionId = crypto.randomUUID();
       await store.mutate(project.revision, [
         { type: "clip.add", sequenceId: sequence.id, clip, mode: "overwrite" },
-        { type: "caption.add", sequenceId: sequence.id, caption: { id: captionId, trackId: captionTrack.id, startTick: 0, durationTick: framesToTicks(30, project.settings.fps), text: "Caption: 100% ready, it's real", style: { fontFamily: "Arial", fontSize: 24, color: "#ffffff", background: "#000000aa", position: "bottom", align: "center" } } }
+        { type: "caption.add", sequenceId: sequence.id, caption: { id: captionId, trackId: captionTrack.id, startTick: 0, durationTick: framesToTicks(30, project.settings.fps), text: "Caption: 100%\nready, it's real", style: { fontFamily: "Arial", fontSize: 18, marginVertical:30, color: "#ffffff", background: "#000000aa", position: "bottom", align: "center" } } }
       ]);
       const outputPath = path.join(root, "output.mp4");
       const render = await renderSequence(store, config, { sequenceId: sequence.id, presetId: "web-h264-1080p", outputPath }).catch((error: unknown) => {
@@ -45,11 +45,11 @@ describe("FFmpeg render integration", () => {
       expect(cachedRender.cacheHit).toBe(true);
       expect(cachedRender.renderKey).toBe(render.renderKey);
       expect(cachedRender.sha256).toBe(render.sha256);
-      await store.mutate(4, [{ type: "caption.update", sequenceId: sequence.id, captionId, patch: { text: "A semantic edit invalidates the cache" } }]);
+      await store.mutate(4, [{ type: "caption.update", sequenceId: sequence.id, captionId, patch: { text: "A semantic edit\ninvalidates the cache" } }]);
       const changedRender = await renderSequence(store, config, { sequenceId: sequence.id, presetId: "web-h264-1080p", outputPath: path.join(root, "changed-output.mp4") });
       expect(changedRender.cacheHit).toBe(false);
       expect(changedRender.renderKey).not.toBe(render.renderKey);
-      const qc = await runQc(store, sequence.id, outputPath, config);
+      const qc = await runQc(store, sequence.id, path.join(root, "changed-output.mp4"), config);
       expect(qc.success).toBe(true);
       expect(qc.passed).toBe(true);
     } finally { await rm(root, { recursive: true, force: true }); }

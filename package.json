@@ -20,7 +20,8 @@
     "ANIMATION.md",
     "NESTING.md",
     "RENDER_CACHE.md",
-    "AUDIO_ACCEPTANCE.md"
+    "AUDIO_ACCEPTANCE.md",
+    "PRODUCTIONS.md"
   ],
   "workspaces": [
     "packages/*"

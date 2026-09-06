@@ -140,11 +140,11 @@ function ffmpegCaptionColor(value: string): string {
   return `0x${match[1]}@${alpha.toFixed(3)}`;
 }
 
-function escapeFilterPath(value: string): string {
+export function escapeFilterPath(value: string): string {
   return value.replace(/\\/g, "/").replace(/:/g, "\\:").replace(/'/g, "\\'");
 }
 
-function captionFontFile(fontFamily: string, configured?: string): string {
+export function captionFontFile(fontFamily: string, configured?: string): string {
   const windows = process.env.WINDIR || "C:\\Windows";
   const family = fontFamily.toLowerCase();
   const windowsName = family.includes("mono") || family.includes("consol") ? "consola.ttf" : family.includes("serif") || family.includes("times") ? "times.ttf" : "arial.ttf";

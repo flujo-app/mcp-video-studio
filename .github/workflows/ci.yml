@@ -44,6 +44,10 @@ jobs:
         env:
           RUN_FFMPEG_INTEGRATION: "1"
           RUN_BROWSER_INTEGRATION: "1"
+      - name: Full 30-second 1080p MCP production and delivery acceptance
+        run: npx vitest run tests/promo-production.integration.test.ts
+        env:
+          RUN_PROMO_INTEGRATION: "1"
       - name: Clean packed installation and actual modern/legacy clients
         run: npm run check:package
         env:

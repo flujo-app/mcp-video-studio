@@ -3,3 +3,5 @@
 .qc-checks {padding-left:1.2rem}.qc-checks li{margin:1rem 0}.qc-checks pre{white-space:pre-wrap;overflow-wrap:anywhere}.qc-checks button{white-space:normal}
 
 [aria-label="Editing workflows"] button {background:#202a38;color:#f1f5fa;border:1px solid #58677b;border-radius:6px;padding:7px 10px;}[aria-label="Editing workflows"] button:hover:not(:disabled){background:#304158;}[aria-label="Editing workflows"] button:disabled{opacity:.5;}
+
+.caption-safe-guide{position:absolute;inset:5%;border:1px dashed #ffffff;box-shadow:0 0 0 1px #0009;pointer-events:none;z-index:5}.caption-inspector pre{white-space:pre-wrap;overflow-wrap:anywhere}.transport button[aria-pressed="true"]{color:#fff;background:#303d52;border-radius:4px}

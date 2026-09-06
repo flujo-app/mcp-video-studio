@@ -1,3 +1,4 @@
+import {measureCaptionLayout} from "./caption-layout.js";
 import { open,stat } from "node:fs/promises";
 import path from "node:path";
 import { ticksToFrames,ticksPerSample,ticksToSeconds,secondsToTicks,type Sequence,type StudioProject } from "@mcp-video-studio/contracts";
@@ -15,6 +16,7 @@ export interface QcCheck {
   startTick?:number;
   endTick?:number;
   clipIds?:string[];
+  captionIds?:string[];
   allowanceId?:string;
 }
 
@@ -99,6 +101,11 @@ export async function runQc(store:ProjectStore,sequenceId:string,filePath:string
  if(probe.hasAudio)checks.push(
   {id:"audio.loudness",status:Number.isFinite(levels["integratedLufs"])&&levels["integratedLufs"]!>=-18&&levels["integratedLufs"]!<=-14?"PASS":"WARN",severity:"warning",expected:{integratedLufs:"-18 to -14"},observed:levels,message:"Integrated loudness is in the review range."},
   {id:"audio.true_peak",status:Number.isFinite(levels["truePeakDbtp"])&&levels["truePeakDbtp"]!<=-1?"PASS":"WARN",severity:"warning",expected:{maxDbtp:-1},observed:levels,message:"True peak is below the review ceiling."});
+ if(probe.hasVideo){
+  const layout=await measureCaptionLayout(store,project,sequence,config,signal);
+  for(const measured of layout.measurements)checks.push({id:"caption.layout:"+measured.captionId,checkId:measured.overflow?"caption.overflow":"caption.safe_area",status:measured.overflow?"FAIL":measured.outsideSafeArea?"WARN":"PASS",severity:measured.overflow?"error":"warning",startTick:measured.startTick,endTick:measured.endTick,clipIds:[],captionIds:[measured.captionId],observed:{...measured},message:measured.overflow?"Caption extends beyond the export raster.":measured.outsideSafeArea?"Caption extends beyond the 5% title-safe guide.":"Caption fits the raster and 5% title-safe guide."});
+  if(!layout.complete)checks.push({id:"caption.analysis.complete",status:"WARN",severity:"warning",message:"Caption analysis is limited to 5000 cues; inspect smaller sequences for a complete report."});
+ }
  const ranges=detectorRanges(decoded.stderr,ticksToSeconds(probe.durationTick));
  checks.push(...ranges.map((range,index)=>finding(sequence,range,index)));
  if(decoded.truncated||ranges.length>=5000)checks.push({id:"analysis.complete",status:"WARN",severity:"warning",message:"Analysis reached its bounded output limit. Review smaller export ranges for complete findings."});
