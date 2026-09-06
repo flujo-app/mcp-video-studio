@@ -18,6 +18,7 @@ integration("renders gain range at exact samples, preserves surrounding audio an
   await store.mutate(2,[{type:"clip.add",sequenceId:sequence.id,clip,mode:"overwrite"},{type:"audio.gain.range",sequenceId:sequence.id,targetType:"clip",targetId:clip.id,startTick:1334*q,endTick:2545*q,gainDb:-20}]);
   const out=path.join(root,"mix.wav");await renderSequence(store,config,{sequenceId:sequence.id,presetId:"audio-wav",outputPath:out});
   const pcm=path.join(root,"mix.f32");await runChecked(config.ffmpegPath,["-hide_banner","-y","-i",out,"-f","f32le","-acodec","pcm_f32le",pcm]);const data=await readFile(pcm),sample=(n:number)=>data.readFloatLE(n*8);
+  expect(data.length/8).toBe(48100);
   expect(sample(99)).toBeCloseTo(0,6);
   expect(sample(1333)).toBeGreaterThan(.1);
   expect(sample(1334)/sample(1333)).toBeCloseTo(.1,5);

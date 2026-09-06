@@ -19,7 +19,7 @@ const video:Record<string,Field[]>={
  chromaKey:[{key:"similarity",value:.15,min:.01,max:1,step:.01},{key:"blend",value:.05,min:0,max:1,step:.01}],grayscale:[],hflip:[],vflip:[]
 };
 function makeEffect(type:string):EffectInstance{
- const fields=audio[type]??video[type]??[];
+ const fields=(Object.hasOwn(audio,type)?audio[type]:Object.hasOwn(video,type)?video[type]:undefined)??[];
  return{id:crypto.randomUUID(),type,enabled:true,version:1,parameters:type==="equalizer"?{bands:[{frequency:100,q:1,gainDb:0},{frequency:1000,q:1,gainDb:0},{frequency:8000,q:1,gainDb:0}]}:{...Object.fromEntries(fields.map(field=>[field.key,field.value])),...(type==="chromaKey"?{color:"#00ff00"}:{})}};
 }
 export function EffectStack({effects,kind,label,onChange}:{effects:EffectInstance[];kind:"audio"|"video";label:string;onChange(effects:EffectInstance[]):void}){
@@ -34,7 +34,7 @@ export function EffectStack({effects,kind,label,onChange}:{effects:EffectInstanc
    <button aria-label={"Move "+label+" effect "+(index+1)+" up"} disabled={index===0} onClick={()=>reorder(index,-1)}>↑</button>
    <button aria-label={"Move "+label+" effect "+(index+1)+" down"} disabled={index===effects.length-1} onClick={()=>reorder(index,1)}>↓</button>
    <button onClick={()=>onChange(effects.filter(item=>item.id!==effect.id))}>Remove {label} {effect.type} {index+1}</button>
-   {(catalog[effect.type]??[]).map(field=><label key={field.key}>{label} {effect.type} {field.key}<input key={String(effect.parameters[field.key])} type="number" min={field.min} max={field.max} step={field.step??1} defaultValue={Number(effect.parameters[field.key]??field.value)} onBlur={event=>{if(event.currentTarget.checkValidity())update(effect.id,{parameters:{...effect.parameters,[field.key]:event.currentTarget.valueAsNumber}});}}/></label>)}
+   {(Object.hasOwn(catalog,effect.type)?catalog[effect.type]!:[]).map(field=><label key={field.key}>{label} {effect.type} {field.key}<input key={String(effect.parameters[field.key])} type="number" min={field.min} max={field.max} step={field.step??1} defaultValue={Number(effect.parameters[field.key]??field.value)} onBlur={event=>{if(event.currentTarget.checkValidity())update(effect.id,{parameters:{...effect.parameters,[field.key]:event.currentTarget.valueAsNumber}});}}/></label>)}
    {effect.type==="chromaKey"&&<label>Key color<input defaultValue={String(effect.parameters.color??"#00ff00")} onBlur={event=>update(effect.id,{parameters:{...effect.parameters,color:event.target.value}})}/></label>}
    {effect.type==="equalizer"&&(Array.isArray(effect.parameters.bands)?effect.parameters.bands:[]).map((band:Record<string,number>,bandIndex)=><div key={bandIndex}>{(["frequency","q","gainDb"] as const).map(key=><label key={key}>{label} EQ band {bandIndex+1} {key}<input type="number" min={key==="frequency"?20:key==="q"?.1:-24} max={key==="frequency"?20000:key==="q"?20:24} step={key==="frequency"?1:.1} defaultValue={band[key]} onBlur={event=>{if(!event.currentTarget.checkValidity())return;const bands=structuredClone(effect.parameters.bands as Record<string,number>[]);bands[bandIndex]![key]=event.currentTarget.valueAsNumber;update(effect.id,{parameters:{...effect.parameters,bands}});}}/></label>)}</div>)}
   </fieldset>)}

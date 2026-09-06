@@ -70,3 +70,11 @@ actual post-mix limiting/bypass and run the supported processor chain in FFmpeg.
 The full local gate now has50 passing tests including real browser/render tests.
 Further transition, range-cache, generation, animation and full production
 acceptance work remains underway; this is not a v1 release claim.
+
+## Transition and QC continuation
+
+Centered crossfades and directional wipes preserve the authored cut and total duration. Finite video/audio/animation sources require real handles; edits fail atomically when unavailable. Clip finishing controls expose crop, scale, blend, speed and transition duration. Rotation uses the configured angle and anchor, and WAV duration remains sample exact.
+
+QC performs a complete decode, measures actual video frames and produces bounded black, freeze and silence ranges with affected clip IDs. Studio can navigate those findings, inspect measured values, and save intentional-range reasons. Reports show their revision and require reanalysis after edits. Concurrent revision failures require a successful reload before reapply; validation errors are not presented as conflicts.
+
+Validation: 55 tests across 26 files passed with real FFmpeg and Chromium enabled, including a browser render/QC/navigation/review/reload/conflict flow, centered transition pixels and exact 48,100-sample WAV output. Packed modern/legacy stdio and browser acceptance also pass. Full epic acceptance work continues; this is not a v1 release.

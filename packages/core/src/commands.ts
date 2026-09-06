@@ -289,12 +289,13 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       addUnique(changed.clips, clip.id);
     } else if (command.type === "transition.add") {
       if (sequence.transitions.some((item) => item.id === command.transition.id)) throw new StudioException("DUPLICATE_ID", `Transition id already exists: ${command.transition.id}`, "input");
-      clipById(sequence, command.transition.fromClipId);
-      clipById(sequence, command.transition.toClipId);
+      assertUnlocked(sequence,clipById(sequence, command.transition.fromClipId).trackId);
+      assertUnlocked(sequence,clipById(sequence, command.transition.toClipId).trackId);
       sequence.transitions.push(structuredClone(command.transition));
     } else if (command.type === "transition.update") {
       const transition = sequence.transitions.find((item) => item.id === command.transitionId);
       if (!transition) throw new StudioException("TRANSITION_NOT_FOUND", `Transition not found: ${command.transitionId}`, "input");
+      assertUnlocked(sequence,clipById(sequence,transition.fromClipId).trackId);assertUnlocked(sequence,clipById(sequence,transition.toClipId).trackId);
       Object.assign(transition, structuredClone(command.patch));
     } else if (command.type === "transition.remove") {
       sequence.transitions = sequence.transitions.filter((transition) => transition.id !== command.transitionId);
@@ -304,6 +305,12 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       else sequence.automation.push(structuredClone(command.lane));
     } else if (command.type === "automation.remove") {
       sequence.automation = sequence.automation.filter((lane) => lane.id !== command.laneId);
+    } else if(command.type==="qc.allowance.set"){
+      const allowances=sequence.qcAllowances??[],index=allowances.findIndex(item=>item.id===command.allowance.id);
+      if(index<0)allowances.push(structuredClone(command.allowance));else allowances[index]=structuredClone(command.allowance);
+      sequence.qcAllowances=allowances;
+    } else if(command.type==="qc.allowance.remove"){
+      sequence.qcAllowances=(sequence.qcAllowances??[]).filter(item=>item.id!==command.allowanceId);
     } else if (command.type === "marker.add") {
       if (sequence.markers.some((marker) => marker.id === command.marker.id)) throw new StudioException("DUPLICATE_ID", `Marker id already exists: ${command.marker.id}`, "input");
       sequence.markers.push(structuredClone(command.marker));
@@ -356,6 +363,7 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
   }
   for (const artifact of next.generatedArtifacts) {
     const sequence = next.sequences.find(item=>item.id===artifact.scope.sequenceId);
+    if(artifact.scope.trackId&&!sequence?.tracks.some(track=>track.id===artifact.scope.trackId))delete artifact.scope.trackId;
     if (artifact.scope.clipId) {
       const clip=sequence?.clips.find(item=>item.id===artifact.scope.clipId);
       if (clip) { artifact.scope.startTick=clip.startTick;artifact.scope.durationTick=clip.durationTick;artifact.scope.trackId=clip.trackId; }

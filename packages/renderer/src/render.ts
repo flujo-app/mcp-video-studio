@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { copyFile, mkdir, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
-import { ProjectStore, sequenceDuration, sha256File, StudioException } from "@mcp-video-studio/core";
+import { prepareTransitionTimeline, transitionStyle, ProjectStore, sequenceDuration, sha256File, StudioException } from "@mcp-video-studio/core";
 import { renderAnimation } from "@mcp-video-studio/animation";
 import { requireFfmpegFilters, filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
 import { audioAutomationFilters } from "./automation.js";
@@ -183,14 +183,15 @@ async function buildInputs(project: StudioProject, sequence: Sequence, store: Pr
   return inputs;
 }
 
-function fadeFilters(sequence: Sequence, clip: Clip): string[] {
-  const filters: string[] = [];
-  const incoming = sequence.transitions.find((transition) => transition.toClipId === clip.id);
-  const outgoing = sequence.transitions.find((transition) => transition.fromClipId === clip.id);
-  if (incoming && incoming.type !== "cut") filters.push(`fade=t=in:st=0:d=${ticksToSeconds(incoming.durationTick)}:alpha=1`);
-  if (outgoing && outgoing.type !== "cut") filters.push(`fade=t=out:st=${Math.max(0, ticksToSeconds(clip.durationTick - outgoing.durationTick))}:d=${ticksToSeconds(outgoing.durationTick)}:alpha=1`);
-  return filters;
+function fadeFilters(sequence:Sequence,clip:Clip):string[]{
+ const incoming=sequence.transitions.find(transition=>transition.toClipId===clip.id&&transitionStyle(transition.type)!=="cut");
+ if(!incoming)return[];
+ const start=ticksToSeconds(clip.startTick),duration=ticksToSeconds(incoming.durationTick),style=transitionStyle(incoming.type);
+ if(style==="crossfade")return["fade=t=in:st="+start+":d="+duration+":alpha=1"];
+ const progress="clip((T-"+start+")/"+duration+",0,1)",condition=style==="wipeleft"?"lte(X/W,"+progress+")":"gte(X/W,1-"+progress+")";
+ return["format=gbrap","geq=r='r(X,Y)':g='g(X,Y)':b='b(X,Y)':a='alpha(X,Y)*"+condition+"'"];
 }
+
 
 function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: InputSpec[], captionFiles: Map<string, string>, maxWidth?: number, defaultFontFile?: string): { graph: string; videoLabel: string; audioLabel: string; durationTick: number; frameCount: number } {
   const durationTick = sequenceDuration(sequence);
@@ -280,6 +281,8 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
       ...(clip.audio.fadeOutTick > 0 ? [`afade=t=out:st=${Math.max(0, ticksToSeconds(clip.durationTick - clip.audio.fadeOutTick))}:d=${ticksToSeconds(clip.audio.fadeOutTick)}`] : []),
       ...audioEffectFilters(clip.audio.effects,project.settings.sampleRate),
       ...audioAutomationFilters(project, sequence, clip),
+      ...sequence.transitions.filter(transition=>transitionStyle(transition.type)!=="cut"&&transition.toClipId===clip.id).map(transition=>"afade=t=in:st=0:d="+ticksToSeconds(transition.durationTick)),
+      ...sequence.transitions.filter(transition=>transitionStyle(transition.type)!=="cut"&&transition.fromClipId===clip.id).map(transition=>"afade=t=out:st="+ticksToSeconds(clip.durationTick-transition.durationTick)+":d="+ticksToSeconds(transition.durationTick)),
       `adelay=${Math.round(clip.startTick / ticksPerSample(project.settings.sampleRate))}S:all=1`
     ];
     const label = `aclip${audioIndex}`;
@@ -314,7 +317,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
   if (options.expectedRevision !== undefined && project.revision !== options.expectedRevision) {
     throw new StudioException("REVISION_CONFLICT", `Preview requested for revision ${options.expectedRevision}, but the project is now revision ${project.revision}.`, "conflict", { expectedRevision: options.expectedRevision, actualRevision: project.revision });
   }
-  const sequence = sequenceById(project, options.sequenceId);
+  const sequence = prepareTransitionTimeline(project,sequenceById(project, options.sequenceId));
   const preset = presetById(project, options.presetId);
   const mediaIds = new Set(sequence.clips.flatMap((clip) => clip.source.type === "media" ? [clip.source.mediaId] : []));
   const animationIds = new Set(sequence.clips.flatMap((clip) => clip.source.type === "animation" ? [clip.source.animationId] : []));
@@ -325,12 +328,13 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: asset.storage.sha256, offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
     output: { maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
-    renderer: 5
+    renderer: 7
   });
   const cachePath = path.join(store.root, "cache", "renders", `${renderKey}.${preset.container}`);
   const durationTick = sequenceDuration(sequence);
   if (durationTick <= 0) throw new StudioException("EMPTY_SEQUENCE", "The sequence has no renderable duration.", "input");
   const frameCount = ticksToFrames(durationTick, project.settings.fps, "ceil");
+  const outputDurationTick=preset.container==="wav"?durationTick:framesToTicks(frameCount,project.settings.fps);
   options.onProgress?.(0.02, "Checking render cache");
   const cached = await stat(cachePath).then((info) => info.isFile() && info.size > 0).catch(() => false);
   if (cached) {
@@ -342,7 +346,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
       options.onProgress?.(1, "Reused cached render");
       return {
         success: true, cacheHit: true, cachePath, outputPath: path.resolve(options.outputPath), projectId: project.projectId, revision: project.revision,
-        sequenceId: sequence.id, renderKey, frameCount, durationTick: framesToTicks(frameCount, project.settings.fps), probe, ...hash, durationMs: 0
+        sequenceId: sequence.id, renderKey, frameCount, durationTick: outputDurationTick, probe, ...hash, durationMs: 0
       };
     } catch (error) {
       if (options.signal?.aborted) throw error;
@@ -371,7 +375,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     const args = [
       ...inputArgs, await filterScriptOption(config.ffmpegPath), graphPath,
       ...(!audioOnly ? ["-map", `[${compiled.videoLabel}]`, "-frames:v", String(compiled.frameCount), "-c:v", preset.videoCodec ?? "libx264"] : []),
-      "-map", `[${compiled.audioLabel}]`, "-t", String(ticksToSeconds(compiled.durationTick)),
+      "-map", `[${compiled.audioLabel}]`, "-t", String(ticksToSeconds(outputDurationTick)),
       ...(preset.videoCodec === "libx264" ? ["-preset", options.encoderPreset ?? "veryfast", "-crf", String(options.crf ?? preset.crf ?? 18)] : []),
       "-c:a", preset.audioCodec ?? "aac",
       ...(preset.audioBitrate ? ["-b:a", preset.audioBitrate] : []),
@@ -389,12 +393,12 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     options.onProgress?.(0.97, "Verifying output");
     const [probe, hash] = await Promise.all([probeMedia(options.outputPath, config, options.signal), sha256File(options.outputPath)]);
     await publishFile(options.outputPath, cachePath);
-    await writeFile(`${cachePath}.json`, `${JSON.stringify({ renderKey, projectId: project.projectId, sequenceId: sequence.id, createdAt: new Date().toISOString(), presetId: preset.id, frameCount: compiled.frameCount, durationTick: compiled.durationTick, sha256: hash.sha256, bytes: hash.bytes }, null, 2)}\n`, "utf8");
+    await writeFile(`${cachePath}.json`, `${JSON.stringify({ renderKey, projectId: project.projectId, sequenceId: sequence.id, createdAt: new Date().toISOString(), presetId: preset.id, frameCount: compiled.frameCount, durationTick: outputDurationTick, sha256: hash.sha256, bytes: hash.bytes }, null, 2)}\n`, "utf8");
     const cache = await pruneRenderCache(store.root, config.cacheMaxBytes, cachePath);
     options.onProgress?.(1, "Completed");
     return {
       success: true, cacheHit: false, cachePath, outputPath: path.resolve(options.outputPath), projectId: project.projectId, revision: project.revision,
-      sequenceId: sequence.id, renderKey, frameCount: compiled.frameCount, durationTick: compiled.durationTick, probe, ...hash,
+      sequenceId: sequence.id, renderKey, frameCount: compiled.frameCount, durationTick: outputDurationTick, probe, ...hash,
       ffmpegCommand: { executable: config.ffmpegPath, args }, durationMs: result.durationMs, cache
     };
   } finally {

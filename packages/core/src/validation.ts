@@ -1,4 +1,5 @@
 import { StudioProjectSchema, ticksPerSample, ticksPerFrame, type Clip, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
+import {prepareTransitionTimeline} from "./transitions.js";
 import { StudioException } from "./errors.js";
 
 function clipEnd(clip: Clip): number {
@@ -27,6 +28,7 @@ export function validateProject(project: StudioProject): StudioProject {
 
   const normalized = parsed.data as StudioProject;
   for (const sequence of normalized.sequences) {
+    prepareTransitionTimeline(normalized,sequence);
     const clips = new Map(sequence.clips.map((clip) => [clip.id, clip]));
     for (const clip of sequence.clips) {
       const track = sequence.tracks.find((item) => item.id === clip.trackId);

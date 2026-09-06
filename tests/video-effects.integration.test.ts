@@ -11,7 +11,7 @@ integration("RGB blend modes preserve the background outside cropped/transformed
   async function pixels(name:string){const output=path.join(root,name+".mkv");await renderSequence(store,config,{sequenceId:sequence.id,presetId:project.exportPresets.find(p=>p.videoCodec==="ffv1")!.id,outputPath:output});const raw=path.join(root,name+".rgb");await runChecked(config.ffmpegPath,["-hide_banner","-y","-i",output,"-frames:v","1","-pix_fmt","rgb24","-f","rawvideo",raw]);const data=await readFile(raw);return(x:number,y:number)=>[...data.subarray((y*160+x)*3,(y*160+x)*3+3)];}
   let pixel=await pixels("multiply");
   expect(pixel(5,5)[1]).toBeGreaterThan(240);expect(Math.max(...pixel(80,45))).toBeLessThan(10);
-  await store.mutate(2,[{type:"clip.update",sequenceId:sequence.id,clipId:clip.id,patch:{blendMode:"screen"}}]);
-  pixel=await pixels("screen");expect(pixel(5,5)[1]).toBeGreaterThan(240);expect(pixel(80,45)[0]).toBeGreaterThan(240);expect(pixel(80,45)[1]).toBeGreaterThan(240);
+  await store.mutate(2,[{type:"clip.update",sequenceId:sequence.id,clipId:clip.id,patch:{blendMode:"screen",transform:{...clip.transform,rotation:90}}}]);
+  pixel=await pixels("screen");expect(pixel(5,5)[1]).toBeGreaterThan(240);expect(pixel(80,45)[0]).toBeGreaterThan(240);expect(pixel(80,45)[1]).toBeGreaterThan(240);expect(pixel(80,15)[0]).toBeGreaterThan(240);expect(pixel(40,45)[0]).toBeLessThan(10);
  }finally{await rm(root,{recursive:true,force:true});}
 },60000);

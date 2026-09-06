@@ -23,6 +23,8 @@ import {
 } from "@mcp-video-studio/contracts";
 import { SelectionTools, useModalFocus } from "./timeline-tools.js";
 import {AudioMixer,ClipAudioTools} from "./audio-tools.js";
+import {QualityControl} from "./qc-tools.js";
+import {ClipFinishing} from "./finishing-tools.js";
 import "./styles.css";
 import "./layout-fixes.css";
 import {
@@ -52,11 +54,13 @@ function defaultClip(trackId: string, source: Clip["source"], name: string, dura
   };
 }
 
+class ApiError extends Error { constructor(message:string,readonly code?:string){super(message);} }
+
 async function api<T>(route: string, init?: RequestInit): Promise<T> {
   const url = route;
   const response = await fetch(url, { ...init, headers: { "content-type": "application/json", authorization: `Bearer ${token}`, ...init?.headers } });
-  const value = await response.json() as T & { success?: boolean; error?: { message?: string } };
-  if (!response.ok || value.success === false) throw new Error(value.error?.message || `Request failed (${response.status})`);
+  const value = await response.json() as T & { success?: boolean; error?: { message?: string;code?:string } };
+  if (!response.ok || value.success === false) throw new ApiError(value.error?.message || "Request failed ("+response.status+")",value.error?.code);
   return value;
 }
 
@@ -91,6 +95,7 @@ function App() {
   const [error, setError] = useState("");
   const [showProjects, setShowProjects] = useState(!projectPath);
   const [showWorkflow, setShowWorkflow] = useState(false);
+  const [pendingReviewed,setPendingReviewed]=useState(false);
   const [pendingCommands, setPendingCommands] = useState<ProjectCommand[]>([]);
   const [showGeneration, setShowGeneration] = useState(false);
   useModalFocus(showProjects||showWorkflow||showGeneration);
@@ -143,7 +148,7 @@ function App() {
       setError(""); setNotice("Saving…");
       const result = await api<{ project: StudioProject }>("/api/commands", { method: "POST", body: JSON.stringify({ projectPath, expectedRevision: project.revision, commands }) });
       setProject(result.project); setNotice(`Saved revision ${result.project.revision}`);
-    } catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); setNotice("Edit rejected"); setPendingCommands(commands); }
+    } catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); setNotice("Edit rejected"); if(caught instanceof ApiError&&caught.code==="REVISION_CONFLICT"){setPendingCommands(commands);setPendingReviewed(false);} }
   }, [project, projectPath]);
 
   const undoRedo = async (kind: "undo" | "redo") => {
@@ -285,7 +290,7 @@ function App() {
       <div className="status" title={display.error ?? notice}><span className={`status-dot ${display.error ? "error" : ""}`} />{notice}</div>
     </header>
 
-    {pendingCommands.length > 0 && <div role="alert"><p>The edit was not saved. Reload the latest project before reviewing and reapplying it.</p><button onClick={() => void openProject(projectPath)}>Reload latest</button><button onClick={() => { const commands=pendingCommands; setPendingCommands([]); void mutate(commands); }}>Reapply edit to current revision</button><button onClick={() => setPendingCommands([])}>Discard edit</button></div>}
+    {pendingCommands.length > 0 && <div role="alert"><p>The edit was not saved. Reload the latest project before reviewing and reapplying it.</p><button onClick={()=>void api<{project:StudioProject}>("/api/project?projectPath="+encodeURIComponent(projectPath)).then(result=>{setProject(result.project);setPendingReviewed(true);setError("");}).catch(error=>setError(error.message))}>Reload latest</button><button disabled={!pendingReviewed} onClick={() => { const commands=pendingCommands; setPendingCommands([]); void mutate(commands); }}>Reapply edit to current revision</button><button onClick={() => setPendingCommands([])}>Discard edit</button></div>}
     {error && <div className="error-banner" role="alert"><span>{error}</span><button aria-label="Dismiss error" onClick={() => setError("")}>×</button></div>}
 
     <main className="workspace">
@@ -294,7 +299,7 @@ function App() {
         <Preview project={project} projectPath={projectPath} sequence={sequence} selectedClip={selectedClip} selectedMedia={selectedMedia} playhead={playhead} ready={previewReady} busy={previewBusy} onBuild={buildPreview} onPlayhead={setPlayhead} />
         <Timeline project={project} projectPath={projectPath} artifactVersion={artifactVersion} sequence={sequence} selectedClipId={selectedClipId} selectedClipIds={selectedClipIds} onSelectClips={selectClips} selectedCaptionId={selectedCaptionId} playhead={playhead} zoom={zoom} onZoom={setZoom} onPlayhead={setPlayhead} onSelect={(id) => { selectClips([id]); }} onSelectCaption={(id) => { setSelectedCaptionId(id); setSelectedClipId(undefined);setSelectedClipIds([]); }} onMove={moveClip} onMutate={mutate} />
       </section>
-      {selectedCaption && project && sequence ? <CaptionInspector project={project} sequence={sequence} caption={selectedCaption} onMutate={mutate} /> : <Inspector project={project} sequence={sequence} clip={selectedClip} jobs={jobs} projectPath={projectPath} onUpdate={updateSelected} onMutate={mutate} onError={setError} />}
+      {selectedCaption && project && sequence ? <CaptionInspector project={project} sequence={sequence} caption={selectedCaption} onMutate={mutate} /> : <Inspector project={project} sequence={sequence} clip={selectedClip} jobs={jobs} projectPath={projectPath} onUpdate={updateSelected} onMutate={mutate} onError={setError} onNavigate={(tick,ids)=>{setPlayhead(tick);selectClips(ids);}} />}
     </main>
 
     {showProjects && <ProjectChooser projects={projects} initialPath={projectPath} onRefresh={refreshProjects} onOpen={openProject} onClose={() => project && setShowProjects(false)} />}
@@ -382,6 +387,7 @@ function Timeline({ project, projectPath, artifactVersion, sequence, selectedCli
   const scrollRef=useRef<HTMLDivElement>(null);
   const [viewport,setViewport]=useState({left:0,width:1200});
   const [trackHeight,setTrackHeight]=useState(84);
+  useEffect(()=>{const element=scrollRef.current;if(!element)return;const position=ticksToSeconds(playhead)*zoom;if(position<element.scrollLeft||position>element.scrollLeft+element.clientWidth-180)element.scrollLeft=Math.max(0,position-180);},[playhead,zoom]);
   const [ripple,setRipple]=useState(false);
   const selected=new Set(selectedClipIds.length?selectedClipIds:selectedClipId?[selectedClipId]:[]);
   const select=(id:string,additive=false)=>onSelectClips(additive?(selected.has(id)?[...selected].filter(item=>item!==id):[...selected,id]):[id]);
@@ -542,7 +548,7 @@ function GeneratedArtifactCard({ artifact, project, projectPath, onProject, onEr
   </article>;
 }
 
-function Inspector({ project, sequence, clip, jobs, projectPath, onUpdate, onMutate, onError }: { project: StudioProject | undefined; sequence: Sequence | undefined; clip: Clip | undefined; jobs: JobRecord[]; projectPath: string; onUpdate(command: ProjectCommand & { type: "clip.update" }): void; onMutate(commands: ProjectCommand[]): Promise<void>; onError(error: string): void }) {
+function Inspector({ project, sequence, clip, jobs, projectPath, onUpdate, onMutate, onError,onNavigate }: { project: StudioProject | undefined; sequence: Sequence | undefined; clip: Clip | undefined; jobs: JobRecord[]; projectPath: string; onNavigate(tick:number,clipIds:string[]):void; onUpdate(command: ProjectCommand & { type: "clip.update" }): void; onMutate(commands: ProjectCommand[]): Promise<void>; onError(error: string): void }) {
   const [tab, setTab] = useState<"clip" | "export" | "jobs">("clip");
   const [outputPath, setOutputPath] = useState("");
   const [presetId,setPresetId]=useState(project?.exportPresets[0]?.id??"web-h264-1080p");
@@ -560,9 +566,9 @@ function Inspector({ project, sequence, clip, jobs, projectPath, onUpdate, onMut
     catch (caught) { onError(caught instanceof Error ? caught.message : String(caught)); }
   };
   return <aside className="panel inspector"><div className="tabs"><button className={tab === "clip" ? "active" : ""} onClick={() => setTab("clip")}>Inspector</button><button className={tab === "export" ? "active" : ""} onClick={() => setTab("export")}>Export</button><button className={tab === "jobs" ? "active" : ""} onClick={() => setTab("jobs")}>Jobs</button></div>
-    {tab === "clip" && (clip ? <div className="inspector-body"><h3>{clip.name}</h3><small>{clip.source.type} clip · {secondsLabel(clip.durationTick)}</small><fieldset><legend>Timing</legend><label>Start (seconds)<input key={`${clip.id}-start-${clip.startTick}`} type="number" min="0" step="0.033" defaultValue={ticksToSeconds(clip.startTick)} onBlur={(event) => { if (!sequence || !project || !Number.isFinite(event.currentTarget.valueAsNumber)) return; const tick = framesToTicks(ticksToFrames(secondsToTicks(Math.max(0, event.currentTarget.valueAsNumber)), project.settings.fps, "round"), project.settings.fps); void onMutate([{ type: "clip.move", sequenceId: sequence.id, clipIds: [clip.id], targetTrackId: clip.trackId, startTick: tick, ripple: false }]); }} /></label><label>Duration (seconds)<input key={`${clip.id}-duration-${clip.durationTick}`} type="number" min={ticksToSeconds(framesToTicks(1, project!.settings.fps))} step="0.033" defaultValue={ticksToSeconds(clip.durationTick)} onBlur={(event) => { if (!sequence || !project || !Number.isFinite(event.currentTarget.valueAsNumber)) return; const duration = framesToTicks(Math.max(1, ticksToFrames(secondsToTicks(event.currentTarget.valueAsNumber), project.settings.fps, "round")), project.settings.fps); void onMutate([{ type: "clip.trim", sequenceId: sequence.id, clipId: clip.id, edge: "out", tick: clip.startTick + duration, ripple: false }]); }} /></label></fieldset>{project && sequence && <EditTools key={clip.id} project={project} sequence={sequence} clip={clip} onMutate={onMutate}/>}<fieldset><legend>Transform</legend><div className="field-pair"><label>X<input type="number" step="0.01" defaultValue={clip.transform.position[0]} onBlur={(event) => patch({ transform: { ...clip.transform, position: [Number(event.target.value), clip.transform.position[1]] } })} /></label><label>Y<input type="number" step="0.01" defaultValue={clip.transform.position[1]} onBlur={(event) => patch({ transform: { ...clip.transform, position: [clip.transform.position[0], Number(event.target.value)] } })} /></label></div><label>Opacity<input type="range" min="0" max="1" step="0.01" value={clip.transform.opacity} onChange={(event) => patch({ transform: { ...clip.transform, opacity: Number(event.target.value) } })} /></label><label>Rotation<input type="number" value={clip.transform.rotation} onChange={(event) => patch({ transform: { ...clip.transform, rotation: Number(event.target.value) } })} /></label></fieldset><fieldset><legend>Audio</legend><label>Gain <output>{clip.audio.gainDb} dB</output><input type="range" min="-60" max="12" step="0.5" value={clip.audio.gainDb} onChange={(event) => patch({ audio: { ...clip.audio, gainDb: Number(event.target.value) } })} /></label><label className="check"><input type="checkbox" checked={clip.audio.muted} onChange={(event) => patch({ audio: { ...clip.audio, muted: event.target.checked } })} /> Muted</label></fieldset>{sequence&&<ClipAudioTools clip={clip} sequence={sequence} onMutate={onMutate}/>}</div> : <div className="empty-panel"><span>◇</span><p>Select a clip to edit timing, transform, audio, and effects.</p></div>)}
+    {tab === "clip" && (clip ? <div className="inspector-body"><h3>{clip.name}</h3><small>{clip.source.type} clip · {secondsLabel(clip.durationTick)}</small><fieldset><legend>Timing</legend><label>Start (seconds)<input key={`${clip.id}-start-${clip.startTick}`} type="number" min="0" step="0.033" defaultValue={ticksToSeconds(clip.startTick)} onBlur={(event) => { if (!sequence || !project || !Number.isFinite(event.currentTarget.valueAsNumber)) return; const tick = framesToTicks(ticksToFrames(secondsToTicks(Math.max(0, event.currentTarget.valueAsNumber)), project.settings.fps, "round"), project.settings.fps); void onMutate([{ type: "clip.move", sequenceId: sequence.id, clipIds: [clip.id], targetTrackId: clip.trackId, startTick: tick, ripple: false }]); }} /></label><label>Duration (seconds)<input key={`${clip.id}-duration-${clip.durationTick}`} type="number" min={ticksToSeconds(framesToTicks(1, project!.settings.fps))} step="0.033" defaultValue={ticksToSeconds(clip.durationTick)} onBlur={(event) => { if (!sequence || !project || !Number.isFinite(event.currentTarget.valueAsNumber)) return; const duration = framesToTicks(Math.max(1, ticksToFrames(secondsToTicks(event.currentTarget.valueAsNumber), project.settings.fps, "round")), project.settings.fps); void onMutate([{ type: "clip.trim", sequenceId: sequence.id, clipId: clip.id, edge: "out", tick: clip.startTick + duration, ripple: false }]); }} /></label></fieldset>{project && sequence && <EditTools key={clip.id} project={project} sequence={sequence} clip={clip} onMutate={onMutate}/>}<fieldset><legend>Transform</legend><div className="field-pair"><label>X<input type="number" step="0.01" defaultValue={clip.transform.position[0]} onBlur={(event) => patch({ transform: { ...clip.transform, position: [Number(event.target.value), clip.transform.position[1]] } })} /></label><label>Y<input type="number" step="0.01" defaultValue={clip.transform.position[1]} onBlur={(event) => patch({ transform: { ...clip.transform, position: [clip.transform.position[0], Number(event.target.value)] } })} /></label></div><label>Opacity<input type="range" min="0" max="1" step="0.01" value={clip.transform.opacity} onChange={(event) => patch({ transform: { ...clip.transform, opacity: Number(event.target.value) } })} /></label><label>Rotation<input type="number" value={clip.transform.rotation} onChange={(event) => patch({ transform: { ...clip.transform, rotation: Number(event.target.value) } })} /></label></fieldset><fieldset><legend>Audio</legend><label>Gain <output>{clip.audio.gainDb} dB</output><input type="range" min="-60" max="12" step="0.5" value={clip.audio.gainDb} onChange={(event) => patch({ audio: { ...clip.audio, gainDb: Number(event.target.value) } })} /></label><label className="check"><input type="checkbox" checked={clip.audio.muted} onChange={(event) => patch({ audio: { ...clip.audio, muted: event.target.checked } })} /> Muted</label></fieldset>{project&&sequence&&<ClipFinishing key={clip.id} project={project} sequence={sequence} clip={clip} onMutate={onMutate}/>}{sequence&&<ClipAudioTools clip={clip} sequence={sequence} onMutate={onMutate}/>}</div> : <div className="empty-panel"><span>◇</span><p>Select a clip to edit timing, transform, audio, and effects.</p></div>)}
     {tab === "export" && <div className="inspector-body"><h3>Export sequence</h3><label>Preset<select value={presetId} onChange={event=>{const id=event.currentTarget.value;setPresetId(id);const preset=project?.exportPresets.find(p=>p.id===id);if(preset)setOutputPath(current=>current.replace(/\.[^/.]+$/, "."+preset.container));}}>{project?.exportPresets.map((preset) => <option value={preset.id} key={preset.id}>{preset.name}</option>)}</select></label><label>Output path<textarea rows={3} value={outputPath} onChange={(event) => setOutputPath(event.target.value)} /></label><button className="primary large" onClick={() => void render()} disabled={!project || !sequence}>Queue render</button><p className="hint">The export uses the same processing as the program preview and verifies the completed file.</p></div>}
-    {tab === "jobs" && <div className="job-list">{jobs.length ? jobs.map((job) => <div className={`job ${job.status}`} key={job.id}><div><strong>{job.type}</strong><span>{job.status}</span></div><p>{job.message}</p><div className="progress"><span style={{ width: `${job.progress * 100}%` }} /></div>{job.error && <small>{job.error.message}</small>}</div>) : <div className="empty-panel"><p>No background jobs yet.</p></div>}</div>}
+    {tab === "jobs" && <div className="job-list">{project&&sequence&&<QualityControl project={project} sequence={sequence} jobs={jobs} projectPath={projectPath} request={(route,input)=>api(route,{method:"POST",body:JSON.stringify(input)})} onMutate={onMutate} onNavigate={onNavigate} onError={onError}/>} {jobs.length ? jobs.map((job) => <div className={`job ${job.status}`} key={job.id}><div><strong>{job.type}</strong><span>{job.status}</span></div><p>{job.message}</p><div className="progress"><span style={{ width: `${job.progress * 100}%` }} /></div>{job.error && <small>{job.error.message}</small>}</div>) : <div className="empty-panel"><p>No background jobs yet.</p></div>}</div>}
   </aside>;
 }
 

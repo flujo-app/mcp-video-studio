@@ -62,3 +62,17 @@ it("round-trips multiline UTF-8 SRT and WebVTT, aligns to frames and rejects mal
   expect(parseCaptions(serializeCaptions(cues,"vtt"),"vtt","track",fps,style)[0]!.text).toBe(cues[0]!.text);
   expect(() => parseCaptions("WEBVTT\n\n00:02.000 --> 00:01.000\nbad", "vtt", "track", fps,style)).toThrow();
 });
+
+it("finite-media transitions require real source handles and reject the entire edit on insufficient headroom",async()=>{
+ const {store,seq,clips,frame}=await fixture();
+ const id="fixture-media";
+ await store.replace(1,p=>{
+  p.media.push({id,name:"Fixture",kind:"video",storage:{mode:"managed",relativePath:"assets/fixture.mp4",sha256:"0".repeat(64),bytes:0},probe:{durationTick:120*frame,hasVideo:true,hasAudio:false,width:320,height:180},createdAt:new Date().toISOString()});
+  p.sequences[0]!.clips[1]!.source={type:"media",mediaId:id};p.sequences[0]!.clips[1]!.sourceInTick=0;
+ },{sequences:[seq.id],clips:[clips[1]!.id],tracks:[],media:[id],animations:[],generatedArtifacts:[]});
+ const transition={id:"transition",sequenceId:seq.id,fromClipId:clips[0]!.id,toClipId:clips[1]!.id,type:"crossfade",durationTick:10*frame,parameters:{}};
+ await expect(store.mutate(2,[{type:"transition.add",sequenceId:seq.id,transition}])).rejects.toThrow("source handles");
+ expect((await store.read()).revision).toBe(2);
+ await store.mutate(2,[{type:"clip.update",sequenceId:seq.id,clipId:clips[1]!.id,patch:{sourceInTick:10*frame}},{type:"transition.add",sequenceId:seq.id,transition}]);
+ expect((await store.read()).sequences[0]!.transitions).toHaveLength(1);
+});

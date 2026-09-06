@@ -107,7 +107,8 @@ const sequenceSchema = z.object({
     points: z.array(z.object({ tick: safeInteger.nonnegative(), value: z.number().finite(), curve: z.enum(["hold", "linear", "easeIn", "easeOut", "easeInOut", "easeOutExpo", "overshoot"]) }))
   })),
   markers: z.array(z.object({ id, tick: safeInteger.nonnegative(), durationTick: safeInteger.nonnegative(), label: z.string(), color: z.string() })),
-  captions: z.array(captionSchema).default([])
+  captions: z.array(captionSchema).default([]),
+  qcAllowances:z.array(z.object({id,checkId:z.enum(["video.black","video.freeze","audio.silence"]),startTick:safeInteger.nonnegative(),endTick:positiveTick,reason:z.string().trim().min(1).max(1000)}).refine(item=>item.endTick>item.startTick,"Allowance must cover a positive interval.")).max(1000).default([])
 });
 
 const animationSchema = z.object({

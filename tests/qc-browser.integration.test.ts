@@ -1,0 +1,43 @@
+import {mkdtemp,rm} from "node:fs/promises";import path from "node:path";import os from "node:os";
+import {expect,it} from "vitest";import {chromium} from "patchright";
+import {Client} from "@modelcontextprotocol/client";import {StdioClientTransport} from "@modelcontextprotocol/client/stdio";
+import {defaultClip,secondsToTicks} from "@mcp-video-studio/contracts";import {ProjectStore} from "@mcp-video-studio/core";
+import {browserEnvironment} from "../packages/animation/src/sandbox.js";
+const integration=process.env.RUN_BROWSER_INTEGRATION==="1"&&process.env.RUN_FFMPEG_INTEGRATION==="1"?it:it.skip;
+integration("editor renders, navigates measured QC, persists review and recovers concurrent revisions",async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),"studio-qc-ui-")),store=await ProjectStore.create(path.join(root,"projects","qc"),"QC browser");
+ const client=new Client({name:"qc-acceptance",version:"1"},{versionNegotiation:{mode:"auto"}});
+ const transport=new StdioClientTransport({command:process.execPath,args:[path.resolve(process.env.STUDIO_TEST_ENTRY??"dist/index.js"),"--stdio"],env:{...Object.fromEntries(Object.entries(process.env).filter((p):p is [string,string]=>typeof p[1]==="string")),VIDEO_STUDIO_DATA_DIR:root,VIDEO_STUDIO_GATEWAY_PORT:"0"},stderr:"pipe"});
+ const browser=await chromium.launch({headless:true,env:browserEnvironment()});
+ try{
+  await store.replace(0,p=>{p.settings.raster={width:160,height:90};},{sequences:[],tracks:[],clips:[],media:[],animations:[],generatedArtifacts:[]});
+  const project=await store.read(),sequence=project.sequences[0]!,track=sequence.tracks[0]!;
+  const lead=defaultClip(track.id,{type:"color",color:"#ff0000"},"Lead",secondsToTicks(1)),black=defaultClip(track.id,{type:"color",color:"#000000"},"Intentional pause",secondsToTicks(3));black.startTick=secondsToTicks(1);
+  await store.mutate(1,[{type:"clip.add",sequenceId:sequence.id,clip:lead,mode:"overwrite"},{type:"clip.add",sequenceId:sequence.id,clip:black,mode:"overwrite"}]);
+  await client.connect(transport);
+  const response=await client.callTool({name:"open_studio",arguments:{}}),url=new URL((response.structuredContent as {studioUrl:string}).studioUrl);url.searchParams.set("projectPath",store.root);
+  const page=await browser.newPage({viewport:{width:1440,height:1000}});page.setDefaultTimeout(20000);await page.goto(url.toString());
+  await page.getByText("Project loaded",{exact:true}).waitFor();await page.getByRole("button",{name:"Export",exact:true}).click();
+  await page.getByRole("button",{name:"Queue render",exact:true}).click();
+  await page.waitForFunction(()=>Boolean((document.querySelector("section[aria-label='Quality control'] input") as HTMLInputElement)?.value));
+  await page.getByRole("button",{name:"Analyze export",exact:true}).click();
+  const finding=page.locator('[data-qc-check="video.black"]');await finding.getByText("WARN video.black",{exact:true}).waitFor();
+  await finding.getByRole("button",{name:/^Jump to/}).click();expect(await page.locator(".transport code").textContent()).toBe("00:00:01:00");
+  await page.getByLabel("Intentional range reason").fill("Intentional scene pause");
+  await finding.getByRole("button",{name:"Mark intentional video.black",exact:true}).click();
+  await page.getByText("Saved revision 3",{exact:true}).waitFor();
+  expect((await store.read()).sequences[0]!.qcAllowances?.[0]?.reason).toBe("Intentional scene pause");
+  await page.reload();await page.getByText("Project loaded",{exact:true}).waitFor();await page.getByRole("button",{name:"Jobs",exact:true}).click();
+  await page.getByRole("button",{name:"Remove allowance video.black",exact:true}).waitFor();
+  await page.getByRole("button",{name:"Analyze export",exact:true}).click();
+  await finding.getByText("PASS video.black",{exact:true}).waitFor();
+  await store.mutate(3,[{type:"track.update",sequenceId:sequence.id,trackId:track.id,patch:{name:"Agent edit"}}]);
+  await page.getByRole("button",{name:"Color",exact:true}).click();
+  const reapply=page.getByRole("button",{name:"Reapply edit to current revision",exact:true});await reapply.waitFor();
+  expect(await reapply.isDisabled()).toBe(true);
+  await page.getByRole("button",{name:"Reload latest",exact:true}).click();
+  await page.getByText("Agent edit",{exact:true}).first().waitFor({state:"attached"});
+  expect(await reapply.isEnabled()).toBe(true);await reapply.click();await page.getByText("Saved revision 5",{exact:true}).waitFor();
+  expect((await store.read()).sequences[0]!.tracks[0]!.name).toBe("Agent edit");
+ }finally{await browser.close();await client.close();await rm(root,{recursive:true,force:true});}
+},60000);

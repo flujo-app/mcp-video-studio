@@ -63,12 +63,16 @@ export function audioEffectFilters(effects:EffectInstance[],sampleRate=48000):st
 export function clipTransformFilters(clip:Clip,canvas:{width:number;height:number}):{filters:string[];x:number;y:number}{
  const width=Math.max(2,Math.round(canvas.width*Math.abs(clip.transform.scale[0]))),height=Math.max(2,Math.round(canvas.height*Math.abs(clip.transform.scale[1])));
  if(width>8192||height>8192||width*height>16777216)throw new StudioException("TRANSFORM_LIMIT","Scaled clips must fit within 8192 per side and 16 megapixels.","input");
- const x=Math.round(clip.transform.position[0]*canvas.width-width*clip.transform.anchor[0]),y=Math.round(clip.transform.position[1]*canvas.height-height*clip.transform.anchor[1]);
+ const radians=(clip.transform.rotation%360)*Math.PI/180,cos=Math.cos(radians),sin=Math.sin(radians);
+ const rotatedWidth=Math.trunc(Math.abs(cos)*width+Math.abs(sin)*height),rotatedHeight=Math.trunc(Math.abs(sin)*width+Math.abs(cos)*height);
+ const anchorX=(clip.transform.anchor[0]-.5)*width,anchorY=(clip.transform.anchor[1]-.5)*height;
+ const x=Math.round(clip.transform.position[0]*canvas.width-rotatedWidth/2-(cos*anchorX-sin*anchorY)),y=Math.round(clip.transform.position[1]*canvas.height-rotatedHeight/2-(sin*anchorX+cos*anchorY));
  const crop=clip.crop,filters:string[]=[];
  if(crop.left||crop.right||crop.top||crop.bottom)filters.push("crop=iw*"+(1-crop.left-crop.right)+":ih*"+(1-crop.top-crop.bottom)+":iw*"+crop.left+":ih*"+crop.top);
  if(clip.transform.scale[0]<0)filters.push("hflip");if(clip.transform.scale[1]<0)filters.push("vflip");
  filters.push("scale="+width+":"+height+":force_original_aspect_ratio=decrease","pad="+width+":"+height+":(ow-iw)/2:(oh-ih)/2:color=black@0","format=rgba");
- if(clip.transform.rotation!==0)filters.push("rotate="+(clip.transform.rotation%360)+"*PI/180:ow=rotw(iw):oh=roth(ih):c=none");
+ if(clip.transform.rotation!==0)filters.push("rotate="+radians+":ow=rotw("+radians+"):oh=roth("+radians+"):c=none");
+ if(clip.transform.scale[0]===0||clip.transform.scale[1]===0)filters.push("colorchannelmixer=aa=0");
  if(clip.transform.opacity<1)filters.push("colorchannelmixer=aa="+clip.transform.opacity);
  return{filters,x,y};
 }

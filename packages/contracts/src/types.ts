@@ -171,6 +171,8 @@ export interface CaptionCue {
   style: CaptionStyle;
 }
 
+export interface QcAllowance { id:UUID;checkId:"video.black"|"video.freeze"|"audio.silence";startTick:number;endTick:number;reason:string }
+
 export interface Sequence {
   id: UUID;
   name: string;
@@ -180,6 +182,7 @@ export interface Sequence {
   automation: AutomationLane[];
   markers: Marker[];
   captions: CaptionCue[];
+  qcAllowances?:QcAllowance[];
 }
 
 export type AnimationNodeType = "group" | "text" | "rect" | "ellipse" | "line" | "path" | "image" | "video" | "camera";
@@ -387,6 +390,8 @@ export type ProjectCommand =
   | { type: "transition.remove"; sequenceId: UUID; transitionId: UUID }
   | { type: "automation.set"; sequenceId: UUID; lane: AutomationLane }
   | { type: "automation.remove"; sequenceId: UUID; laneId: UUID }
+  | { type: "qc.allowance.set"; sequenceId:UUID; allowance:QcAllowance }
+  | { type: "qc.allowance.remove"; sequenceId:UUID; allowanceId:UUID }
   | { type: "marker.add"; sequenceId: UUID; marker: Marker }
   | { type: "marker.update"; sequenceId: UUID; markerId: UUID; patch: Partial<Pick<Marker, "tick" | "durationTick" | "label" | "color">> }
   | { type: "marker.remove"; sequenceId: UUID; markerId: UUID }
