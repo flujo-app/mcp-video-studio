@@ -1,211 +1,230 @@
-# Video Studio acceptance tracking
+# Video Studio acceptance evidence
 
-Updated 2026-09-06T04:10:43.227Z. PR remains a draft while feasible criteria below are implemented. No epic is closed by this checkpoint.
+Updated 2026-09-06T09:02:01.383575+00:00. Committed baseline: bf5c67bd270effa985cdfe32c403e334219da54e. PR #7 remains a draft. This maps every criterion in issues #1�#6; no issue is automatically closed.
+
+All implementation and verification runs use the ai-computer MCP VM agent-workstation. The exact baseline clean-install gate passed 120 ordinary and 214 real tests, installed 88-tool modern/legacy/EOF checks, five installed browser workflows, and npm audit with zero findings. Both minute-delivery workflows additionally pass against a fresh installed package with all seven installed workflows. Baseline bf5c67b passed all six Linux/macOS/Windows Node22/24 jobs in CI run 34023163232. The new test/document checkpoint still requires its own exact-head CI.
 
 ## Issue 6: The five acceptance productions in `TECHNICAL_PLAN.md` pass from clean installs.
 
-Status: in-progress.
+Status: automated-productions-in-final-validation.
 
-- CI 34007281456: clean package and browser/media checks on Windows/macOS/Linux Node22/24.
+- The 30-second MCP promo delivers 900 decoded 1920x1080/30 frames with stereo 48 kHz AAC, faststart and all 12 QC checks passing.
+- The 30-minute/901-clip fixture and deterministic multi-scene animation production pass their dedicated tests.
+- Both same-input one-minute productions pass title/animation, caption defect repair, normalization and 1,800-frame delivery. The browser completes 68 durable revisions with all 8 applicable QC checks passing; the agent completes 26 revisions with all 7 applicable checks passing.
 
-Remaining: Build the full 30s promo and agent-only acceptance production. The mixed-media long-project fixture and multiscene SVG/morph/transform/text/camera/particles renderer production pass locally; the long project also passed Linux Node22 CI 34013043222. Unfamiliar-human acceptance needs a human tester.
+Remaining: Complete final six-job platform CI; clean-installed minute delivery passes. An unfamiliar-human usability benchmark remains external.
 
 ## Issue 6: A 30-minute project remains responsive and a one-clip edit invalidates only required render work.
 
 Status: verified.
 
-- tests/long-project.integration.test.ts passed:30min/901mixed video/image/color/audio clips with proxies,54000frames,180cached ranges
-- Actual stdio MCP editor load545ms/far-end scroll51ms; last-clip change reuses179ranges and continuous audio cache
-- Dedicated LinuxNode22 CI step added; all platform regular parity/browser gates remain
+- tests/long-project.integration.test.ts: 30 minutes, 901 mixed clips with proxies, 54,000 frames and 180 cached ranges.
+- Measured editor load 545 ms and far-end scroll 51 ms; one final-clip edit reuses 179 ranges and the continuous audio cache. Dedicated Linux Node22 CI passed.
 
-Remaining: No remaining implementation for this measured fixture; CI confirmation pending on next push.
+Remaining: No code gap identified for this bounded fixture; repeat its dedicated gate on the final PR head.
 
 ## Issue 6: Human and agent benchmarks complete without shell commands, direct project JSON edits, or hand-written FFmpeg filtergraphs.
 
-Status: in-progress.
+Status: automated-productions-in-final-validation.
 
-- Real SDK2 packed install and browser-only project/selection/caption/template workflows pass.
+- The 30-second production performs every project mutation through actual MCP.
+- Both one-minute counterparts share prepared video/music/still inputs. Browser editing retains its 56-control matrix and reaches 68 revisions through delivery; actual modern and legacy MCP sessions prove targeted conflict repair and durable history.
+- Minute delivery extensions use existing title/animation, caption layout repair, normalization and public export/QC actions. Fixture preparation and read-only media inspection are outside the editing workflow.
 
-Remaining: Complete the prescribed full agent production. Unfamiliar-human usability benchmark is an external acceptance step.
+Remaining: Clean-installed minute delivery passes. Recruit an unfamiliar human for the independent usability benchmark; automation is not a substitute.
 
 ## Issue 6: No unresolved P0/P1 correctness, data-loss, security, accessibility, or preview/render-parity defects remain at v1.0.0.
 
-Status: in-progress.
+Status: release-gate-open.
 
-- Host/Origin/token/HTML/path/archive/provider adversarial tests; atomic history and disk fault tests; axe and actual pixel/sample tests.
+- Exact LUT checkpoint bf5c67b passes clean install/check with 120 ordinary tests and 214 real-media/browser tests, installed 88-tool modern/legacy/EOF checks, five installed browser workflows and npm audit with zero findings.
+- Strict pixel, sample, atomic-write, provenance, sandbox, token/Origin, path and credential-canary tests remain enabled.
 
-Remaining: Finish all remaining code criteria and independent final review; no v1.0 claim.
+Remaining: Final combined supported-platform CI, independent release review and manual assistive-technology assessment remain required before v1.0. No issue closure or v1.0 claim.
 
 ## Issue 5: QC findings navigate directly to affected timeline ranges with evidence.
 
 Status: verified.
 
-- tests/qc-ranges.integration.test.ts: real decoded frame counts and timestamped black/freeze/silence with clip IDs and persisted intentional ranges
-- tests/qc-browser.integration.test.ts: browser queues export/QC, navigates to1.000s, inspects measured values, persists review and reloads
+- tests/qc-ranges.integration.test.ts and qc-browser.integration.test.ts exercise decoded frame counts, timestamped black/freeze/silence findings, affected clip IDs, measured evidence, direct timeline jumps and persisted intentional-range review.
+- Caption layout findings additionally identify caption IDs and exact timeline ranges.
 
-Remaining: No remaining work for range navigation and measured evidence; additional finishing/QC checks remain tracked under finishing coverage.
+Remaining: No identified implementation gap for this criterion; final combined CI remains shared.
 
 ## Issue 5: Caption/title workflows support import, edit, style, burn-in, and sidecar export.
 
-Status: in-progress.
+Status: verified.
 
-- SRT/WebVTT import/export, caption inspector/style, real drawtext burn-in and templates/browser workflow pass.
+- CAPTIONS.md documents SRT/WebVTT/ASS interchange, portable managed TTF/OTF fonts, text/timing/style/outline/shadow/margin controls, burn-in and sidecars.
+- Real caption-finishing/layout/font tests exercise bounded FFmpeg metrics, clipping and 5% safe-area measurement, repair, staleness, reopen and axe. Full promo delivery includes editable titles and captions.
 
-Remaining: ASS interchange, font import/overflow/safe-area workflows and full finishing browser acceptance.
+Remaining: Unsupported advanced ASS inline overrides are explicitly rejected rather than silently changed; subjective typography review remains external.
 
 ## Issue 5: Export and project archives are atomic, validated, portable, and reproducible from provenance.
 
-Status: in-progress.
+Status: verified.
 
-- tests/archive.test.ts: repeatable bytes, materialized linked sources, checksum/path validation and atomic import; schema2 recovery migration tests.
-- Source hashes rechecked and streams/duration validated before atomic export publication; corrupt cache failure preserves prior export
+- ARCHIVES.md and export/archive real browser/process tests prove atomic checksummed portable archives, managed relink/consolidation, cancellation and restart reconciliation.
+- Render receipts pin immutable project snapshots, nested inputs, source/LUT hashes, encoder/environment and output hashes; reproduction checks source availability and exact encoder choices.
+- Windows checkpoint de4fbb2 adds bounded rename retries without deleting the original and native lock-release tests.
 
-Remaining: Archive cancellation/recovery jobs, media relink/consolidation workflow and export provenance/history surface.
+Remaining: Final Windows CI must confirm the native retry fixture. Unavailable recorded hardware is explicitly rejected during reproduction.
 
 ## Issue 5: Effects and transitions have preview/final coverage and never require caller-authored filtergraphs.
 
-Status: in-progress; original nine-effect matrix verified locally.
+Status: verified.
 
-- The shared preview/export renderer passes exact whole/ranged FFV1 pixel comparisons for color, brightness, blur, sharpen, vignette, chroma key, grayscale, horizontal flip and vertical flip. Actual H264 preview/final delivery meets mean absolute RGB error <= 3 and RMS <= 8; see VIDEO_EFFECTS.md.
-- FFmpeg 5.1 and 7.0.2 both pass 31 actual encoded packets/decoded frames at 12, 24 and 30000/1001 fps for whole and seven-frame ranges. Integer frame PTS fixes a fractional range boundary loss; explicit rational encoding fixes newer FFmpeg's default-rate mismatch.
-- Existing centered crossfade/wipe, crop/scale/rotation/blend and fractional-speed source tests pass. The separate audio parity checkpoint is committed.
+- VIDEO_EFFECTS.md: all nine color effects preserve original alpha; exact whole/range lossless pixels and H264 preview/final MAE <= 3, RMS <= 8 are tested. Geometric masks preserve alpha in ranges and nested sequences.
+- LUTS.md: bounded managed .cube parsing/import, two interpolation methods, exact whole/range color changes, nested/archive hash dependencies and actual installed browser/MCP workflows.
+- EXPORTS.md and RETIMING.md: HEVC/GIF/PNG ZIP/H264/VP9/FFV1/WAV, rational frame clocks, exact audio slices, encoder fallback/replay, freeze/reverse/linear ramps with actual final PCM count and transactional recovery.
 
-- Real format tests decode HEVC, GIF, PNG ZIP, H264, VP9, FFV1 and WAV ranges; exact stateful WAV slices and numbered PNG/hash manifests pass. Standard ZIP and ZIP64 repeat byte-for-byte with fixed metadata.
-- Modern/legacy MCP plus bundled CLI/Chromium tests preserve ranges, actual encoder choice and unchanged project snapshots across export/replay. Explicit software fallback works; unavailable recorded hardware rejects replay. See EXPORTS.md.
-
-Remaining: checkpoint and finish combined platform verification of these format, range, encoder and video-effect fixes. Managed LUTs, geometric masks and freeze/reverse/speed-remapping operations are active independent implementation scopes. They are not covered by the nine-effect fixture.
+Remaining: Real hardware encoders require available hardware. GIF centisecond timing and pitch-following variable ramps are explicit documented contracts, not claims of arbitrary precision or pitch preservation.
 
 ## Issue 4: A human can inspect and edit a generated animation at node/property/keyframe granularity in Studio.
 
-Status: in-progress.
+Status: verified.
 
-- UI node name/text/position controls and basic templates exist.
+- tests/animation-editor.integration.test.ts exercises hierarchy/canvas selection, keyboard movement, properties, operations/keyframes, durable undo/redo/reopen and axe.
+- Shared editor/export painter supports grouped transforms, SVG morphs, kinetic text, camera motion, seeded particles and bounded embedded media.
 
-Verified by tests/animation-editor.integration.test.ts: real MCP-launched browser hierarchy, canvas selection, keyboard movement, property and keyframe edits, durable undo/redo/reopen and zero axe violations. The multiscene SVG/morph/transform/kinetic-text/camera/particles production has sampled editor/export pixel parity and repeated decoded-frame identity. Additional clip-operation coverage remains below.
+Remaining: Unfamiliar-human and manual assistive-technology acceptance remain external; template aesthetics are not measured by deterministic tests.
 
 ## Issue 4: An MCP client can make a targeted animation change without replacing the whole scene document.
 
 Status: verified.
 
-- tests/http-security.test.ts and tests/advanced.test.ts: actual modern/legacy SDK clients update one animation node/operation while preserving the rest.
+- Typed edit_animation applies individual node/property/operation edits through actual modern and legacy clients while preserving unmentioned scene objects.
+- Generation-region and animation-clips tests also preserve unrelated human animation edits during activation/revert.
 
-Remaining: No remaining work for targeted scene mutation criterion; broader animation epic remains open.
+Remaining: No identified code gap; final combined CI remains shared.
 
 ## Issue 4: Repeated renders are deterministic and hostile HTML cannot access network, navigation, popups, downloads, service workers, or filesystem APIs.
 
-Status: in-progress.
+Status: verified.
 
-- Sandbox adversarial network/parent/storage/worker/popup tests; nonblank deterministic pixel hashes and stuck-frame cancellation pass.
+- Sandbox adversarial tests cover network, parent access, navigation, popups, downloads, workers/service workers, storage and filesystem surfaces.
+- Deterministic clock/PRNG, seeded crypto, explicit frame-driven scheduling and immutable same-frame canvas capture retain strict nonblank pixel hashes.
+- c6406229 recovers a lost canvas by drawing the same frame on a fresh canvas at most three times; persistent loss rejects publication. Subsequent macOS timing checkpoint jobs passed strict animation gates.
 
-Verified by tests/sandbox.integration.test.ts: seeded crypto/UUID, forbidden timers/RAF, navigation closure, download/service-worker rejection and exact requested CSS animation timestamps. Remaining: independent final security review with the full production fixture.
+Remaining: Final combined platform CI and independent security review remain required; no claim that a finite adversarial suite proves universal sandbox safety.
 
 ## Issue 4: Animation clips remain ordinary trim/split/speed/effect/transition-capable timeline clips.
 
-Status: in-progress.
+Status: verified.
 
-- Source-handle validation and shared clip trim/split/speed/effect rendering paths.
+- tests/animation-clips.integration.test.ts compares actual split/trim/speed/effect/transition pixels with equivalent managed media.
+- Fractional source-frame, original timestamp and cached-range regressions preserve frames at 24 and 30000/1001 fps.
 
-Verified locally by tests/animation-clips.integration.test.ts: split and trim preserve exact frames, faster/slower playback, effects and centered transitions match equivalent managed media. The regression exposed and fixed fractional-source-frame range boundaries; 24fps and 29.97fps sources now match whole rendering at fractional speeds. CI confirmation pending for this follow-up.
+Remaining: No identified implementation gap; final combined CI remains shared.
 
 ## Issue 3: A new MCP session can inspect a project and safely revise one generated region without regenerating or disturbing unrelated work.
 
-Status: in-progress.
+Status: verified-with-fixture-provider.
 
-- Generation lineage/current draft/version inspection plus reconnect/persistence tests.
+- Generation region composition persists across fresh modern/legacy sessions and multiple versions; source regions outside the selected revision preserve unrelated clips, captions, automation and human transforms.
+- Real HTTP provider fixtures, actual FFmpeg outputs, pending-edit race/revert and nested animation activation tests pass.
 
-Remaining: Implement explicit partial-region regeneration for all kinds and prove unrelated content preservation over a new MCP session.
+Remaining: Authenticated paid-provider generation requires provider accounts/credits and is unclaimed.
 
 ## Issue 3: No regeneration becomes active before explicit review unless the caller chooses an explicit auto-activate policy.
 
-Status: in-progress.
+Status: verified-with-fixture-provider.
 
-- tests/generation.test.ts: regenerated child stays draft and does not replace active output before review.
+- Generation drafts remain inactive by default; explicit autoActivate policy is the only opt-in bypass.
+- Tests cover pending/success/failed/rejected states and revision-safe activation with unrelated human edits.
 
-Remaining: Add explicit auto-activation policy and cross-kind browser/provider-mock acceptance.
+Remaining: Authenticated paid-provider acceptance remains external.
 
 ## Issue 3: Humans can compare, approve, reject, revert, and annotate every generated version in Studio.
 
-Status: in-progress.
+Status: verified-with-fixture-provider.
 
-- Existing approve/reject/activate UI; compare/annotate feature APIs and local-media adoption.
+- GENERATION.md and actual browser tests cover bounded A/B playback, automatic range stop, rapid switching, annotations, approve/reject/revert and reopened state.
+- Fault-injected older HTTP project responses cannot overwrite newer same-project revisions.
 
-Remaining: Connect A/B/ranged audition, version diffs, annotations and reversion to the browser.
+Remaining: Independent human review of provider output quality and authenticated paid-provider acceptance remain external.
 
 ## Issue 3: Provider secrets remain server-side and are absent from projects, jobs, history, browser storage, logs, and tool results.
 
-Status: in-progress.
+Status: verified-with-fixture-provider.
 
-- Provider redirects, bounded responses, request-ID removal, configured-secret redaction and endpoint validation tests pass.
+- Provider canary tests inspect project files, jobs, history, browser storage, logs and tool results; keys stay server-side and provider errors/configuration labels are sanitized.
+- Bounded caption/audio inputs and raw PCM/mulaw/alaw decoder/temp-cleanup tests use local HTTP fixtures without real keys.
 
-Remaining: Add end-to-end all-storage/log/browser/tool canary assertions across generation kinds and failures.
+Remaining: Real provider-account acceptance remains external; no credentials were requested or exposed by these fixtures.
 
 ## Issue 2: Human and MCP clients can make exact time-ranged audio changes without replacing unaffected clips.
 
-Status: verified locally; exact-head platform CI pending.
+Status: verified.
 
-- Gain/pan/numeric effect ranges are available in the editor and MCP. Actual FFmpeg tests preserve every outside final PCM sample, including downstream stateful processors. See AUDIO_ACCEPTANCE.md and tests/audio-parameter-range*.ts.
+- Exact audio pan/effect ranges use full-history graph variants masked by integer sample index, preserving every outside sample.
+- Real 44.1-to-48 kHz pan/delay/compressor and actual modern/legacy MCP range tests pass.
 
-Remaining: Confirm these gates on the six-platform Node 22/24 CI matrix.
+Remaining: No identified implementation gap; subjective listening review remains external.
 
 ## Issue 2: Preview and exported audio meet documented per-effect parity tolerances.
 
-Status: verified locally; exact-head platform CI pending.
+Status: verified.
 
-- All ten supported processors pass the documented decoded preview/final AAC PCM matrix (1/8388608 maximum difference), with 44.1-to-48 kHz conversion, exact ranges and nonzero delay/reverb tails. See tests/audio-parity-matrix.integration.test.ts.
+- AUDIO_ACCEPTANCE.md documents the per-effect matrix and PCM tolerance of 1/8388608, continuous float-WAV cache and one final master bus.
+- All supported effects, stateful tails, output ranges and actual preview/final decoded PCM are checked without widening the strict tail-signal assertion.
 
-Remaining: Confirm these gates on the six-platform Node 22/24 CI matrix.
+Remaining: Manual listening-panel acceptance remains external.
 
 ## Issue 2: Automation is sample/grid aligned, survives regeneration/source swaps, and is covered by boundary tests.
 
-Status: verified locally; exact-head platform CI pending.
+Status: verified.
 
-- Hold/linear gain and hold pan/effect ranges retain sample-aligned points and durable undo. Actual modern/legacy MCP tests preserve all three lane types through partial regeneration, three reviewed versions, a real imported spoken source swap and final render. Unsupported audio curves fail explicitly.
+- Automation sample/grid boundary tests retain envelope values outside edited ranges and survive source swaps, regeneration and nested master-cache changes.
+- Clip duplication remaps automation/relation IDs; linked/ripple edits preserve source handles and automation through durable undo/redo.
 
-Remaining: Confirm these gates on the six-platform Node 22/24 CI matrix.
+Remaining: No identified code gap; final combined CI remains shared.
 
 ## Issue 2: A VO + music project can be ducked, mixed, loudness-normalized, reviewed, and exported without an external DAW.
 
-Status: verified locally; exact-head platform CI pending.
+Status: verified.
 
-- Actual stdio MCP and Chromium produce spoken narration plus music, apply dialogue processing and range edits, duck/mix/normalize with track and final buses, meter decoded preview playback, review loudness/true peak, and export MP4 plus WAV. Measured production: -16.03 LUFS, -5.29 dBTP, 360 frames at 1920x1080. The intentional static slate remains a video-freeze review warning.
+- Actual spoken VO/music browser workflow applies dialogue processing, ducks music, normalizes the final bus, reads live decoded meters, reviews and exports MP4/WAV.
+- The full promo and completed agent-minute delivery pass loudness/true-peak QC; non-finite measurements serialize as explicit null.
 
-Remaining: Confirm these gates on the six-platform Node 22/24 CI matrix.
+Remaining: No external DAW is required for these fixtures. Human listening/quality judgments remain external.
 
 ## Issue 1: A human can assemble and revise a multi-track one-minute edit without direct JSON editing or terminal assistance.
 
-Status: in-progress.
+Status: verified.
 
-- Browser imports captions, creates titles/color, edits selection and undo/redo; core import/export paths tested.
+- Committed core browser benchmark performs 56 pointer/keyboard edits on the same provided 60-second video/music/still composition and proves persistence after reload.
+- The public MCP counterpart performs linked split, undo/redo, source revisions and modern/legacy conflict repair; its complete 1,800-frame delivery extension now passes.
 
-Remaining: Full one-minute multi-track production with provided mixed media; unfamiliar human verification external.
+Remaining: The extended browser and clean-installed title/caption/audio/QC/export gates pass; unfamiliar-human usability remains external.
 
 ## Issue 1: Pointer and keyboard flows cover every core operation above.
 
-Status: in-progress.
+Status: verified.
 
-- Multi-selection/copy/paste/duplicate/group/link, track controls, keyboard trims/moves and modal focus implemented; browser proves core subset.
+- EDITING.md and real browser matrix cover split, slip/slide/roll, pointer/keyboard trims, transition controls, markers, in/out/loop/jog, group/link/ripple, insert modes, track state/order, clipboard and durable undo/redo.
+- Source-time thumbnail/waveform tiles are virtualized, content-keyed and tested across zoom levels. Targeted mask, retiming, LUT, caption, audio and export controls have separate real browser gates.
 
-Remaining: Marquee, transition/marker/range/loop/jog controls, full keyboard and screen-reader acceptance.
+Remaining: Manual screen-reader and full keyboard usability review by a human remain external; axe automation reports no detected violations in covered flows.
 
 ## Issue 1: Linked/grouped/ripple edits have boundary tests and durable undo/redo.
 
-Status: in-progress.
+Status: verified.
 
-- tests/ripple-boundaries.test.ts five linked split/move/trim/insert/delete tests; advanced roll/slide/slip and reopening undo tests pass.
+- Linked/grouped/ripple boundary tests and actual modern/legacy MCP tests cover optional group/link IDs, explicit clearing, duplication with automation remapping and exact source handles.
+- Undo/redo persists in the atomic history cursor across reopen, with cross-process locking and restart/publication fault tests.
 
-Remaining: Add remaining overwrite/sparse grouping/automation interpolation edge cases and redo coverage; linked roll/slide currently explicit unsupported boundaries.
+Remaining: Final Windows native write-retry and combined CI remain required.
 
 ## Issue 1: A concurrent human/model edit produces a visible conflict/reapply flow rather than lost work.
 
 Status: verified.
 
-- tests/qc-browser.integration.test.ts: concurrent external revision becomes visible conflict, reapply is disabled until reload, reapplied edit preserves external track rename
-- Actual SDK modern/legacy revision conflict tests also pass
+- Actual browser conflict flow exposes stale revision, disables reapply until the latest revision loads, then preserves another writer's track rename.
+- Modern/legacy MCP rejects stale writes; minute-production targeted repair retains unrelated clips/reviews. Monotonic HTTP-refresh tests prevent delayed older responses replacing committed edits.
 
-Remaining: No remaining work for conflict/reapply acceptance.
+Remaining: No identified implementation gap; final combined CI remains shared.
 
-External acceptance remains explicit: unfamiliar-human usability benchmark and authenticated paid-provider generation have not been claimed.
+The retained successful 30-second production, project, inputs and contact sheet are at /workspace/mcp-remediation/evidence/video-studio/promo-production-20260906. An automated browser run does not establish unfamiliar-human usability, and fixture HTTP providers do not establish authenticated paid-provider acceptance.
 
-Animation checkpoint: full local gate passes 68 tests, packed modern/legacy MCP clients, persistence, EOF and browser checks. Explicit sample spans pass Linux/macOS CI for the preceding audio-only checkpoint; Windows jobs are pending.
-
-CI 34013282337 passed all six Windows/macOS/Linux Node22/24 jobs at head 7c6d0cd, including strict audio parity and the 30-minute mixed-media fixture.
+The two full-minute outputs and complete project/input directories from the clean installed gate are retained at /workspace/mcp-remediation/evidence/video-studio/minute-production-20260906. Its human-minute.json and agent-minute.json reports identify exact paths, revisions, decoded frame counts and QC measurements. The gate passed 120 ordinary tests, 88-tool modern/legacy/EOF persistence, seven installed workflows and npm audit with zero findings. No implementation or test blob changed after that successful gate; only this evidence paragraph was finalized.
