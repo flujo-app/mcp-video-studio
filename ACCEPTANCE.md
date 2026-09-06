@@ -1,6 +1,6 @@
 # Video Studio acceptance evidence
 
-Updated 2026-09-06T09:02:01.383575+00:00. Committed baseline: bf5c67bd270effa985cdfe32c403e334219da54e. PR #7 remains a draft. This maps every criterion in issues #1�#6; no issue is automatically closed.
+Updated 2026-09-06T09:02:01.383575+00:00. Committed baseline: bf5c67bd270effa985cdfe32c403e334219da54e. PR #7 remains a draft. This maps every criterion in issues #1-#6; no issue is automatically closed.
 
 All implementation and verification runs use the ai-computer MCP VM agent-workstation. The exact baseline clean-install gate passed 120 ordinary and 214 real tests, installed 88-tool modern/legacy/EOF checks, five installed browser workflows, and npm audit with zero findings. Both minute-delivery workflows additionally pass against a fresh installed package with all seven installed workflows. Baseline bf5c67b passed all six Linux/macOS/Windows Node22/24 jobs in CI run 34023163232. The new test/document checkpoint still requires its own exact-head CI.
 
