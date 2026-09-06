@@ -1,4 +1,4 @@
-import { StudioProjectSchema, ticksPerSample, ticksPerFrame, type Clip, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
+import { animationProblems, StudioProjectSchema, ticksPerSample, ticksPerFrame, type Clip, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import {prepareTransitionTimeline} from "./transitions.js";
 import { StudioException } from "./errors.js";
 
@@ -62,6 +62,7 @@ export function validateProject(project: StudioProject): StudioProject {
     }
   }
   for (const animation of normalized.animations) {
+    const problems=animationProblems(animation);if(problems.length)throw new StudioException("INVALID_ANIMATION",problems[0]!,"input",{problems});
     const nodes = new Map(animation.nodes.map(node => [node.id, node]));
     if (nodes.size !== animation.nodes.length || new Set(animation.operations.map(operation => operation.id)).size !== animation.operations.length) throw new StudioException('DUPLICATE_ID', 'Animation IDs must be unique.', 'input');
     for (const node of animation.nodes) {

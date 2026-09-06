@@ -119,8 +119,8 @@ const animationSchema = z.object({
   seed: safeInteger,
   mode: z.enum(["declarative", "html"]),
   html: z.string().max(2_000_000).optional(),
-  nodes: z.array(z.object({ id, parentId: id.optional(), type: z.enum(["group", "text", "rect", "ellipse", "line", "path", "image", "video", "camera"]), name: z.string(), properties: z.record(z.string(), z.unknown()), transform: transformSchema })),
-  operations: z.array(z.object({ id, type: z.enum(["create", "write", "fade", "transform", "moveAlongPath", "rotate", "scale", "wait"]), targetId: id, startTick: safeInteger.nonnegative(), durationTick: safeInteger.nonnegative(), easing: z.enum(["hold", "linear", "easeIn", "easeOut", "easeInOut", "easeOutExpo", "overshoot"]), parameters: z.record(z.string(), z.unknown()) })),
+  nodes: z.array(z.object({ id, parentId: id.optional(), type: z.enum(["group", "text", "rect", "ellipse", "line", "path", "image", "video", "camera", "particles"]), name: z.string(), properties: z.record(z.string(), z.unknown()), transform: transformSchema })),
+  operations: z.array(z.object({ id, type: z.enum(["create", "write", "fade", "transform", "moveAlongPath", "rotate", "scale", "wait", "morph", "property"]), targetId: id, startTick: safeInteger.nonnegative(), durationTick: safeInteger.nonnegative(), easing: z.enum(["hold", "linear", "easeIn", "easeOut", "easeInOut", "easeOutExpo", "overshoot"]), parameters: z.record(z.string(), z.unknown()) })),
   htmlAssetId: id.optional()
 });
 

@@ -4,3 +4,5 @@ export * from "./schema.js";
 export * from "./defaults.js";
 
 export * from "./captions.js";
+
+export * from "./animation.js";

@@ -6,16 +6,13 @@ import { chromium } from "patchright";
 import { ticksPerFrame, type AnimationDocument, type Rational } from "@mcp-video-studio/contracts";
 import { sha256File, StudioException } from "@mcp-video-studio/core";
 import { ffmpegArtifact, type StudioConfig } from "@mcp-video-studio/media";
+import { animationProblems } from "@mcp-video-studio/contracts";
+import { createAnimationPainter } from "./painter.js";
 import { evaluateAnimation } from "./evaluate.js";
 
-export const ANIMATION_RENDERER_VERSION=2;
+export const ANIMATION_RENDERER_VERSION=3;
 
-const RENDERER_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:transparent}canvas{display:block}</style></head><body><canvas id="canvas"></canvas><script>
-const canvas=document.getElementById('canvas');const ctx=canvas.getContext('2d');
-window.__setup=(w,h,bg)=>{canvas.width=w;canvas.height=h;window.__background=bg};
-function color(value,fallback){return typeof value==='string'?value:fallback}
-window.__applyState=(nodes)=>{ctx.clearRect(0,0,canvas.width,canvas.height);if(window.__background&&window.__background!=='transparent'){ctx.fillStyle=window.__background;ctx.fillRect(0,0,canvas.width,canvas.height)}for(const node of nodes){if(!node.visible||node.transform.opacity<=0)continue;const t=node.transform,p=node.properties||{};ctx.save();ctx.globalAlpha=t.opacity;ctx.translate(t.position[0],t.position[1]);ctx.rotate(t.rotation*Math.PI/180);ctx.scale(t.scale[0],t.scale[1]);if(node.type==='rect'){ctx.fillStyle=color(p.fill,'#fff');ctx.fillRect(-(p.width||100)*t.anchor[0],-(p.height||100)*t.anchor[1],p.width||100,p.height||100)}else if(node.type==='ellipse'){ctx.fillStyle=color(p.fill,'#fff');ctx.beginPath();ctx.ellipse(0,0,(p.width||100)/2,(p.height||100)/2,0,0,Math.PI*2);ctx.fill()}else if(node.type==='line'){ctx.strokeStyle=color(p.stroke,'#fff');ctx.lineWidth=p.strokeWidth||4;ctx.beginPath();ctx.moveTo(p.x1||0,p.y1||0);ctx.lineTo(p.x2||100,p.y2||0);ctx.stroke()}else if(node.type==='text'){ctx.fillStyle=color(p.fill,'#fff');ctx.font=(p.fontWeight||600)+' '+(p.fontSize||64)+'px '+(p.fontFamily||'sans-serif');ctx.textAlign=p.textAlign||'center';ctx.textBaseline='middle';ctx.fillText(p.text||node.name,0,0)}ctx.restore()}};
-</script></body></html>`;
+const RENDERER_HTML = '<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:transparent}canvas{display:block}</style></head><body><canvas id="canvas"></canvas><script>window.__applyState=('+createAnimationPainter.toString()+')(document.getElementById("canvas"));</script></body></html>';
 
 export interface AnimationRenderOptions {
   outputPath: string;
@@ -25,6 +22,7 @@ export interface AnimationRenderOptions {
 }
 
 export async function renderAnimation(document: AnimationDocument, config: StudioConfig, options: AnimationRenderOptions): Promise<Record<string, unknown>> {
+  const problems=animationProblems(document);if(problems.length)throw new StudioException("INVALID_ANIMATION",problems[0]!,"input",{problems});
   if (document.mode === "html" && !document.html?.trim()) throw new StudioException("HTML_REQUIRED", "HTML animations require a self-contained html document.", "input");
   const perFrame = ticksPerFrame(options.fps);
   const frameCount = Math.ceil(document.durationTick / perFrame);
@@ -34,8 +32,9 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
   const frames = path.join(scratch, "frames");
   await mkdir(frames, { recursive: true });
   const browser = await chromium.launch({ headless: true, env: browserEnvironment() }).catch(async error=>{await rm(scratch,{recursive:true,force:true}).catch(()=>undefined);throw error;});
-  const context = await browser.newContext({ serviceWorkers: "block", acceptDownloads: false, viewport: { width: document.canvas.width, height: document.canvas.height }, deviceScaleFactor: 1 });
-  const page = await context.newPage();
+  const startupFailure=async(error:unknown):Promise<never>=>{await browser.close().catch(()=>undefined);await rm(scratch,{recursive:true,force:true}).catch(()=>undefined);throw error;};
+  const context = await browser.newContext({ serviceWorkers: "block", acceptDownloads: false, viewport: { width: document.canvas.width, height: document.canvas.height }, deviceScaleFactor: 1 }).catch(startupFailure);
+  const page = await context.newPage().catch(startupFailure);
   page.setDefaultTimeout(10000);
   let timedOut=false;
   const abort=()=>{void browser.close();};
@@ -46,13 +45,12 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
     let target: import("patchright").Frame | import("patchright").Page = page;
     if(document.mode === "html") target=await prepareSandbox(browser,page,context,document.html!,document.seed);
     else {await context.route("**/*",route=>route.abort());await page.setContent(RENDERER_HTML,{waitUntil:"load"});await page.evaluate(()=>globalThis.document.fonts.ready.then(()=>undefined));}
-    if (document.mode === "declarative") await page.evaluate(([w,h,bg]) => { (window as unknown as {__setup:(w:unknown,h:unknown,bg:unknown)=>void}).__setup(w,h,bg); }, [document.canvas.width, document.canvas.height, document.canvas.background], false);
     for (let frame = 0; frame < frameCount; frame += 1) {
       if (options.signal?.aborted) throw new StudioException("CANCELLED", "Animation render was cancelled.", "runtime");
       const tick = frame * perFrame;
       if (document.mode === "declarative") {
         const state = evaluateAnimation(document, tick);
-        await page.evaluate(nodes => { (window as unknown as {__applyState:(nodes:unknown)=>void}).__applyState(nodes); }, state, false);
+        await page.evaluate(async ({nodes,frame}) => { await (window as unknown as {__applyState:(nodes:unknown,frame:unknown)=>Promise<unknown>}).__applyState(nodes,frame); }, {nodes:state,frame:{...document.canvas,seed:document.seed,time:tick/35_280_000}}, false);
       } else {
         await target.evaluate(async state => {
           const host=window as unknown as {__studioFrame:(time:number,frame:number)=>void;__studioFailure?:string;renderFrame?:(state:unknown)=>unknown};

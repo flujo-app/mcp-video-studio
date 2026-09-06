@@ -8,7 +8,7 @@ Status: in-progress.
 
 - CI 34007281456: clean package and browser/media checks on Windows/macOS/Linux Node22/24.
 
-Remaining: Build the full 30s promo and agent-only acceptance production, the mixed-media long-project fixture, and the SVG/morph/camera/particles production. Unfamiliar-human acceptance needs a human tester.
+Remaining: Build the full 30s promo and agent-only acceptance production. The mixed-media long-project fixture and multiscene SVG/morph/transform/text/camera/particles renderer production pass locally; the long project also passed Linux Node22 CI 34013043222. Unfamiliar-human acceptance needs a human tester.
 
 ## Issue 6: A 30-minute project remains responsive and a one-clip edit invalidates only required render work.
 
@@ -77,7 +77,7 @@ Status: in-progress.
 
 - UI node name/text/position controls and basic templates exist.
 
-Remaining: Operation/keyframe/property/hierarchy controls, canvas selection and the complete animation production.
+Verified by tests/animation-editor.integration.test.ts: real MCP-launched browser hierarchy, canvas selection, keyboard movement, property and keyframe edits, durable undo/redo/reopen and zero axe violations. The multiscene SVG/morph/transform/kinetic-text/camera/particles production has sampled editor/export pixel parity and repeated decoded-frame identity. Additional clip-operation coverage remains below.
 
 ## Issue 4: An MCP client can make a targeted animation change without replacing the whole scene document.
 
@@ -202,3 +202,5 @@ Status: verified.
 Remaining: No remaining work for conflict/reapply acceptance.
 
 External acceptance remains explicit: unfamiliar-human usability benchmark and authenticated paid-provider generation have not been claimed.
+
+Animation checkpoint: full local gate passes 68 tests, packed modern/legacy MCP clients, persistence, EOF and browser checks. Explicit sample spans pass Linux/macOS CI for the preceding audio-only checkpoint; Windows jobs are pending.

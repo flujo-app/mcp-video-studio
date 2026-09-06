@@ -1,3 +1,4 @@
+import { morphPath } from "@mcp-video-studio/contracts";
 import type { AnimationDocument, AnimationNode, Transform } from "@mcp-video-studio/contracts";
 import { ease, mix } from "./easing.js";
 
@@ -24,6 +25,7 @@ export function evaluateAnimation(document: AnimationDocument, tick: number): Ev
   for (const operation of operations) {
     const state = states.get(operation.targetId);
     if (!state) continue;
+    if(tick<operation.startTick&&operation.type!=="create"&&operation.type!=="write")continue;
     const raw = operation.durationTick === 0 ? (tick >= operation.startTick ? 1 : 0) : (tick - operation.startTick) / operation.durationTick;
     const progress = ease(operation.easing, raw);
     if (operation.type === "create" || operation.type === "write") {
@@ -35,11 +37,18 @@ export function evaluateAnimation(document: AnimationDocument, tick: number): Ev
     } else if (operation.type === "transform") {
       state.transform = blendTransform(state.transform, operation.parameters.to as Partial<Transform> | undefined ?? {}, progress);
     } else if (operation.type === "rotate") {
-      state.transform.rotation = mix(state.transform.rotation, Number(operation.parameters.to ?? state.transform.rotation), progress);
+      state.transform.rotation = mix(Number(operation.parameters.from??state.transform.rotation), Number(operation.parameters.to ?? state.transform.rotation), progress);
     } else if (operation.type === "scale") {
       const to = operation.parameters.to;
       const target: [number, number] = Array.isArray(to) && to.length >= 2 ? [Number(to[0]), Number(to[1])] : [Number(to ?? 1), Number(to ?? 1)];
       state.transform.scale = [mix(state.transform.scale[0], target[0], progress), mix(state.transform.scale[1], target[1], progress)];
+    } else if(operation.type==="morph"){
+      state.properties.path=morphPath(String(operation.parameters.from??state.properties.path??state.properties.d??""),String(operation.parameters.to??""),progress);
+    } else if(operation.type==="property"){
+      const property=String(operation.parameters.property),from=operation.parameters.from??state.properties[property],to=operation.parameters.to;
+      if(typeof from==="number"&&typeof to==="number")state.properties[property]=mix(from,to,progress);
+      else if(typeof from==="string"&&typeof to==="string"&&/^#[0-9a-f]{6}$/i.test(from)&&/^#[0-9a-f]{6}$/i.test(to))state.properties[property]="#"+[1,3,5].map(offset=>Math.max(0,Math.min(255,Math.round(mix(parseInt(from.slice(offset,offset+2),16),parseInt(to.slice(offset,offset+2),16),progress)))).toString(16).padStart(2,"0")).join("");
+      else state.properties[property]=progress<1?from:to;
     } else if (operation.type === "moveAlongPath") {
       const points = operation.parameters.points;
       if (Array.isArray(points) && points.length >= 2) {

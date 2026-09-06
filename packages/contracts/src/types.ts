@@ -185,7 +185,7 @@ export interface Sequence {
   qcAllowances?:QcAllowance[];
 }
 
-export type AnimationNodeType = "group" | "text" | "rect" | "ellipse" | "line" | "path" | "image" | "video" | "camera";
+export type AnimationNodeType = "group" | "text" | "rect" | "ellipse" | "line" | "path" | "image" | "video" | "camera" | "particles";
 
 export interface AnimationNode {
   id: UUID;
@@ -198,7 +198,7 @@ export interface AnimationNode {
 
 export interface AnimationOperation {
   id: UUID;
-  type: "create" | "write" | "fade" | "transform" | "moveAlongPath" | "rotate" | "scale" | "wait";
+  type: "create" | "write" | "fade" | "transform" | "moveAlongPath" | "rotate" | "scale" | "wait" | "morph" | "property";
   targetId: UUID;
   startTick: number;
   durationTick: number;

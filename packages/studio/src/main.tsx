@@ -1,3 +1,4 @@
+import {AnimationEditor} from "./animation-editor.js";
 import React, { useCallback, useEffect, useMemo, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import {
@@ -588,8 +589,7 @@ createRoot(document.getElementById("root")!).render(<React.StrictMode>{token ? <
 
 function EditTools({project,sequence,clip,onMutate}:{project:StudioProject;sequence:Sequence;clip:Clip;onMutate(commands:ProjectCommand[]):Promise<void>}) {
   const [frames,setFrames]=useState(1),[from,setFrom]=useState(ticksToSeconds(clip.startTick)),[to,setTo]=useState(ticksToSeconds(clip.startTick+clip.durationTick)),[gain,setGain]=useState(-12);
-  const [nodeId,setNodeId]=useState("");
-  const animation=project.animations.find(a=>clip.source.type==="animation"&&a.id===clip.source.animationId),node=animation?.nodes.find(n=>n.id===nodeId)??animation?.nodes[0];
+  const animation=project.animations.find(a=>clip.source.type==="animation"&&a.id===clip.source.animationId);
   const delta=framesToTicks(frames,project.settings.fps),sampleTick=TICKS_PER_SECOND/project.settings.sampleRate,align=(s:number)=>Math.round(secondsToTicks(s)/sampleTick)*sampleTick;
   return <>
     <fieldset><legend>Timeline operations</legend><label>Frames to adjust<input type="number" step="1" value={frames} onChange={e=>setFrames(e.currentTarget.valueAsNumber)} /></label>
@@ -599,11 +599,7 @@ function EditTools({project,sequence,clip,onMutate}:{project:StudioProject;seque
     <fieldset><legend>Gain automation / ducking</legend><label>Range start (seconds)<input type="number" step="0.01" min="0" value={from} onChange={e=>setFrom(e.currentTarget.valueAsNumber)} /></label><label>Range end (seconds)<input type="number" step="0.01" min="0" value={to} onChange={e=>setTo(e.currentTarget.valueAsNumber)} /></label><label>Gain offset (dB)<input type="number" min="-120" max="24" value={gain} onChange={e=>setGain(e.currentTarget.valueAsNumber)} /></label>
       <button onClick={()=>void onMutate([{type:"audio.gain.range",sequenceId:sequence.id,targetType:"clip",targetId:clip.id,startTick:align(from),endTick:align(to),gainDb:gain,laneId:"gain-"+clip.id}])}>Set gain range</button>
     </fieldset>
-    {animation?.mode==="declarative"&&node&&<fieldset><legend>Animation objects</legend><label>Object<select value={node.id} onChange={e=>setNodeId(e.currentTarget.value)}>{animation.nodes.map(n=><option value={n.id} key={n.id}>{n.name} ({n.type})</option>)}</select></label><label>Object name<input key={node.id+node.name} defaultValue={node.name} onBlur={e=>void onMutate([{type:"animation.node.update",animationId:animation.id,nodeId:node.id,patch:{name:e.currentTarget.value}}])}/></label>
-      {node.type==="text"&&<label>Object text<textarea key={node.id+String(node.properties.text)} defaultValue={String(node.properties.text??"")} onBlur={e=>void onMutate([{type:"animation.node.update",animationId:animation.id,nodeId:node.id,patch:{properties:{...node.properties,text:e.currentTarget.value}}}])}/></label>}
-      <div className="field-pair">{[0,1].map(axis=><label key={axis}>{axis===0?"Object X":"Object Y"}<input type="number" key={node.id+"-"+axis+"-"+node.transform.position[axis]} defaultValue={node.transform.position[axis]} onBlur={e=>{const position=[...node.transform.position] as [number,number];position[axis]=e.currentTarget.valueAsNumber;void onMutate([{type:"animation.node.update",animationId:animation.id,nodeId:node.id,patch:{transform:{...node.transform,position}}}]);}}/></label>)}</div>
-      <button onClick={()=>void onMutate([{type:"animation.node.remove",animationId:animation.id,nodeId:node.id,cascade:true}])}>Remove object and its children</button>
-    </fieldset>}
+    {animation?.mode==="declarative"&&<AnimationEditor animation={animation} fps={project.settings.fps} onMutate={onMutate}/>}
   </>;
 }
 
