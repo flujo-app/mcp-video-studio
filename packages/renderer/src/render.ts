@@ -29,6 +29,7 @@ interface InputSpec {
   media?: MediaAsset;
   inputIndex: number;
   path?: string;
+  streams?: "video" | "audio";
 }
 
 function canonicalHash(value: unknown): string {
@@ -159,7 +160,7 @@ function captionFontFile(fontFamily: string, configured?: string): string {
   return match;
 }
 
-async function buildInputs(project: StudioProject, sequence: Sequence, store: ProjectStore, config: StudioConfig, signal?: AbortSignal, progress?: (value: number, message: string) => void): Promise<InputSpec[]> {
+async function buildInputs(project: StudioProject, sequence: Sequence, store: ProjectStore, config: StudioConfig, signal?: AbortSignal, progress?: (value: number, message: string) => void, streams: {video?:boolean;audio?:boolean} = {}): Promise<InputSpec[]> {
   const enabled = sequence.clips.filter((clip) => clip.enabled);
   const inputs: InputSpec[] = [];
   let index = 0;
@@ -167,10 +168,12 @@ async function buildInputs(project: StudioProject, sequence: Sequence, store: Pr
     if (clip.source.type === "media") {
       const media = mediaById(project, clip.source.mediaId);
       const source = mediaPath(store, media);
-      inputs.push({ args: media.kind === "image" ? ["-loop", "1", "-i", source] : ["-i", source], clip, media, inputIndex: index++, path: source });
-    } else if (clip.source.type === "color") {
+      // Independent demuxers prevent a trimmed video stream from ending the clip's audio input.
+      if(streams.video!==false&&(media.probe.hasVideo||media.kind==="image"))inputs.push({args:media.kind==="image"?["-loop","1","-an","-i",source]:["-an","-i",source],clip,media,inputIndex:index++,path:source,streams:"video"});
+      if(streams.audio!==false&&media.probe.hasAudio)inputs.push({args:["-vn","-i",source],clip,media,inputIndex:index++,path:source,streams:"audio"});
+    } else if (streams.video!==false&&clip.source.type === "color") {
       inputs.push({ args: ["-f", "lavfi", "-i", `color=c=${ffmpegColor(clip.source.color)}:s=${project.settings.raster.width}x${project.settings.raster.height}:r=${project.settings.fps.numerator}/${project.settings.fps.denominator}`], clip, inputIndex: index++ });
-    } else if (clip.source.type === "animation") {
+    } else if (streams.video!==false&&clip.source.type === "animation") {
       const animationId = clip.source.animationId;
       const animation = project.animations.find((candidate) => candidate.id === animationId);
       if (!animation) throw new StudioException("ANIMATION_NOT_FOUND", `Animation not found: ${animationId}`, "input");
@@ -209,7 +212,7 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
   let videoLabel = "base0";
   if(pass.video!==false){
   statements.push(`color=c=${ffmpegColor(project.settings.background)}:s=${width}x${height}:r=${fps}:d=${durationSeconds},format=rgba${pass.range ? ",setpts=PTS+"+ticksToSeconds(pass.range.startTick)+"/TB" : ""}[base0]`);
-  const visual = inputs.filter(input => !sequence.tracks.find(track => track.id === input.clip.trackId)?.hidden).filter((input) => input.clip.source.type === "color" || input.media?.probe.hasVideo || input.media?.kind === "image" || input.clip.source.type === "animation")
+  const visual = inputs.filter(input=>input.streams!=="audio").filter(input => !sequence.tracks.find(track => track.id === input.clip.trackId)?.hidden).filter((input) => input.clip.source.type === "color" || input.media?.probe.hasVideo || input.media?.kind === "image" || input.clip.source.type === "animation")
     .sort((a, b) => {
       const trackA = sequence.tracks.find((track) => track.id === a.clip.trackId)?.order ?? 0;
       const trackB = sequence.tracks.find((track) => track.id === b.clip.trackId)?.order ?? 0;
@@ -270,7 +273,7 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
   if(pass.audio!==false){
   const audibleTracks = sequence.tracks.filter((track) => track.type === "audio" || track.type === "video");
   const anySolo = audibleTracks.some((track) => track.solo);
-  const audioInputs = inputs.filter((input) => input.media?.probe.hasAudio && (() => {
+  const audioInputs = inputs.filter((input) => input.streams!=="video"&&input.media?.probe.hasAudio && (() => {
     const track = sequence.tracks.find((candidate) => candidate.id === input.clip.trackId);
     return track && !track.muted && (!anySolo || track.solo) && !input.clip.audio.muted;
   })());
@@ -342,11 +345,11 @@ async function continuousAudio(project:StudioProject,sequence:Sequence,store:Pro
   clips:clips.map(({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})=>({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})),
   tracks:sequence.tracks.map(({id,type,muted,solo,gainDb,pan,effects})=>({id,type,muted,solo,gainDb,pan,effects})),
   automation:sequence.automation,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
-  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:9,animationRenderer:ANIMATION_RENDERER_VERSION});
+  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:10,animationRenderer:ANIMATION_RENDERER_VERSION});
  const cached=confinedPath(store.root,path.join(store.root,"cache","renders","audio-"+key+".wav"));
  let hit=false;try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
  if(!hit){
-  const inputs=await buildInputs(project,{...sequence,clips},store,config,options.signal,options.onProgress);
+  const inputs=await buildInputs(project,{...sequence,clips},store,config,options.signal,options.onProgress,{video:false});
   const graph=buildFilterGraph(project,sequence,inputs,new Map(),undefined,undefined,{video:false});
   const graphPath=path.join(scratch,"continuous-audio.txt");await writeFile(graphPath,graph.graph,"utf8");
   await ffmpegArtifact(config,[...inputs.flatMap(input=>input.args),await filterScriptOption(config.ffmpegPath),graphPath,"-map","["+graph.audioLabel+"]","-t",String(ticksToSeconds(durationTick)),"-c:a","pcm_f32le","-rf64","auto","-vn"],cached,{signal:options.signal,timeoutMs:24*60*60_000});
@@ -377,13 +380,13 @@ async function videoRanges(project:StudioProject,sequence:Sequence,store:Project
    settings:{raster:project.settings.raster,fps:project.settings.fps,background:project.settings.background,colorSpace:project.settings.colorSpace},
    media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),
    animations:project.animations.filter(animation=>animationIds.has(animation.id)),
-   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:9,animationRenderer:ANIMATION_RENDERER_VERSION
+   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:10,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cached=confinedPath(store.root,path.join(store.root,"cache","renders","video-"+key+".mkv"));
   let hit=false;
   try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
   if(!hit){
-   const inputs=await buildInputs(project,rangeSequence,store,config,options.signal,options.onProgress);
+   const inputs=await buildInputs(project,rangeSequence,store,config,options.signal,options.onProgress,{audio:false});
    const compiled=buildFilterGraph(project,rangeSequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{audio:false,range:{startTick,endTick}});
    const graphPath=path.join(scratch,"range-"+ranges.length+".txt");await writeFile(graphPath,compiled.graph,"utf8");
    await ffmpegArtifact(config,[...inputs.flatMap(input=>input.args),await filterScriptOption(config.ffmpegPath),graphPath,"-map","["+compiled.videoLabel+"]","-frames:v",String(compiled.frameCount),"-c:v","ffv1","-level","3","-an"],cached,{signal:options.signal,timeoutMs:60*60_000});
@@ -426,7 +429,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: mediaHashes.get(asset.id), offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
     output: { videoRangeFrames:options.videoRangeFrames??null, maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
-    renderer: 9,animationRenderer:ANIMATION_RENDERER_VERSION
+    renderer: 10,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cachePath = confinedPath(store.root,path.join(store.root,"cache","renders",renderKey+"."+preset.container));
   const durationTick = sequenceDuration(sequence);
@@ -473,7 +476,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     const cachedVideo=useRanges?await videoRanges(project,sequence,store,config,options,scratch,captionFiles,mediaHashes):undefined;
     const cachedAudio=cachedVideo?await continuousAudio(project,sequence,store,config,options,scratch,mediaHashes):undefined;
     const inputSequence=cachedVideo?{...sequence,clips:[]}:audioOnly?{...sequence,clips:sequence.clips.filter(clip=>audibleClip(project,clip))}:sequence;
-    const inputs=await buildInputs(project,inputSequence,store,config,options.signal,options.onProgress);
+    const inputs=await buildInputs(project,inputSequence,store,config,options.signal,options.onProgress,{video:!audioOnly});
     const compiled = buildFilterGraph(project,sequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{video:!audioOnly&&!cachedVideo,audio:!cachedAudio,...(cachedVideo?{cachedVideoInput:inputs.length}:{}),...(cachedAudio?{cachedAudioInput:inputs.length+1}:{})});
     const graphPath = path.join(scratch, "filter-complex.txt");
     await writeFile(graphPath, compiled.graph, "utf8");
