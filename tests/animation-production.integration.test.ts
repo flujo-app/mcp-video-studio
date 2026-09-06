@@ -1,5 +1,6 @@
-import {mkdtemp,readFile,rm} from "node:fs/promises";import os from "node:os";import path from "node:path";
-import {expect,it} from "vitest";import {chromium} from "patchright";
+import * as mediaEngine from "@mcp-video-studio/media";
+import {mkdtemp,readFile,rm,copyFile} from "node:fs/promises";import os from "node:os";import path from "node:path";
+import {expect,it,vi} from "vitest";import {chromium} from "patchright";
 import {defaultTransform,secondsToTicks,morphPath,animationProblems,type AnimationDocument} from "@mcp-video-studio/contracts";
 import {createAnimationPainter,evaluateAnimation,renderAnimation} from "@mcp-video-studio/animation";
 import {loadConfig,runChecked} from "@mcp-video-studio/media";
@@ -57,8 +58,10 @@ integration("decodes bounded embedded image/video nodes and holds the source end
   await runChecked(config.ffmpegPath,["-hide_banner","-y","-f","lavfi","-i","color=c=red:s=16x16","-frames:v","1","-threads","1",image]);
   await runChecked(config.ffmpegPath,["-hide_banner","-y","-f","lavfi","-i","color=c=blue:s=16x16:r=2","-t","1","-c:v","libvpx-vp9",video]);
   const doc:AnimationDocument={id:"assets",name:"Assets",mode:"declarative",durationTick:secondsToTicks(2),seed:0,canvas:{width:32,height:16,background:"transparent"},operations:[],nodes:[node("image","image",{src:"data:image/png;base64,"+(await readFile(image)).toString("base64"),width:16,height:16},8,8),node("video","video",{src:"data:video/webm;base64,"+(await readFile(video)).toString("base64"),width:16,height:16},24,8)]};
-  const output=path.join(root,"assets.mkv");await renderAnimation(doc,config,{fps:{numerator:2,denominator:1},outputPath:output});
+  const originalArtifact=mediaEngine.ffmpegArtifact,captured=path.join(root,"first-canvas.png");const capture=vi.spyOn(mediaEngine,"ffmpegArtifact").mockImplementation(async(...args)=>{const inputs=args[1],pattern=inputs[inputs.indexOf("-i")+1];if(pattern?.endsWith("%08d.png"))await copyFile(pattern.replace("%08d","00000000"),captured);return originalArtifact(...args);});
+  const output=path.join(root,"assets.mkv");try{await renderAnimation(doc,config,{fps:{numerator:2,denominator:1},outputPath:output});}finally{capture.mockRestore();}
+
   const raw=path.join(root,"assets.rgba");await runChecked(config.ffmpegPath,["-hide_banner","-y","-i",output,"-pix_fmt","rgba","-f","rawvideo",raw]);const bytes=await readFile(raw),frameSize=32*16*4;expect(bytes.length).toBe(frameSize*4);
-  if(bytes[0]!<=240)console.log("EMBEDDED_PIXEL_DIAGNOSTIC",JSON.stringify({left:[...bytes.subarray(0,4)],right:[...bytes.subarray(16*4,16*4+4)],last:[...bytes.subarray(frameSize*3,frameSize*3+4)]}));expect(bytes[0]).toBeGreaterThan(240);expect(bytes[16*4+2]).toBeGreaterThan(240);expect(bytes.subarray(0,frameSize).equals(bytes.subarray(frameSize*3))).toBe(true);
+  if(bytes[0]!<=240){const pngRaw=path.join(root,"canvas.rgba");await runChecked(config.ffmpegPath,["-hide_banner","-y","-i",captured,"-pix_fmt","rgba","-f","rawvideo",pngRaw]);const canvas=await readFile(pngRaw);console.log("EMBEDDED_PIXEL_DIAGNOSTIC",JSON.stringify({canvasLeft:[...canvas.subarray(0,4)],canvasRight:[...canvas.subarray(16*4,16*4+4)],canvasNonzero:canvas.reduce((sum,value)=>sum+Number(value!==0),0),left:[...bytes.subarray(0,4)],right:[...bytes.subarray(16*4,16*4+4)],last:[...bytes.subarray(frameSize*3,frameSize*3+4)],outputNonzero:bytes.reduce((sum,value)=>sum+Number(value!==0),0)}));}expect(bytes[0]).toBeGreaterThan(240);expect(bytes[16*4+2]).toBeGreaterThan(240);expect(bytes.subarray(0,frameSize).equals(bytes.subarray(frameSize*3))).toBe(true);
  }finally{await rm(root,{recursive:true,force:true});}
 },60000);
