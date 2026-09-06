@@ -394,7 +394,7 @@ export class StudioRuntime {
         await progress(0.65, "Fitting generated audio to the requested slot");
         binary.data=await fitGeneratedAudio(binary.data,binary.extension,region.durationTick,this.config,signal,binary.rawAudio);binary.extension="wav";binary.mimeType="audio/wav";
         const sha256 = createHash("sha256").update(binary.data).digest("hex");
-        const relativePath = path.join("assets", sha256.slice(0, 2), sha256.slice(2, 4), `${sha256}.${binary.extension}`);
+        const relativePath = path.posix.join("assets", sha256.slice(0, 2), sha256.slice(2, 4), `${sha256}.${binary.extension}`);
         const filePath = path.join(store.root, relativePath);
         await atomicWrite(filePath, binary.data);
         const probe = await probeMedia(filePath, this.config, signal);
