@@ -26,8 +26,14 @@ integration.each([false,true])("video ranges preserve exact frames and continuou
    expect(decoded[0]!.length).toBe(name==="audio"?192000*2*4:120*160*90*3/2);
    expect(decoded[1]!.length).toBe(decoded[0]!.length);
    if(name==="audio"){
-    let maximum=0;
-    for(let index=0;index<decoded[0]!.length;index+=4)maximum=Math.max(maximum,Math.abs(decoded[0]!.readFloatLE(index)-decoded[1]!.readFloatLE(index)));
+    let maximum=0,maximumIndex=0,firstDifference=-1,lastDifference=-1,differences=0;
+    for(let index=0;index<decoded[0]!.length;index+=4){
+     const difference=Math.abs(decoded[0]!.readFloatLE(index)-decoded[1]!.readFloatLE(index));
+     if(difference>maximum){maximum=difference;maximumIndex=index/8;}
+     if(difference>1/8388608){if(firstDifference<0)firstDifference=index/8;lastDifference=index/8;differences++;}
+    }
+    if(maximum>1/8388608)console.log("AUDIO_PARITY_DIAGNOSTIC",JSON.stringify({maximum,maximumIndex,firstDifference,lastDifference,differences,aroundMaximum:Array.from({length:9},(_,i)=>{const sample=Math.max(0,Math.min(191999,Math.floor(maximumIndex)+i-4));return{sample,whole:decoded[0]!.readFloatLE(sample*8),ranged:decoded[1]!.readFloatLE(sample*8)};}),ffmpeg:(await runChecked(config.ffmpegPath,["-version"])).stdout.split("\n")[0]}));
+
     // One 24-bit PCM least-significant bit accommodates final integer rounding.
     expect(maximum).toBeLessThanOrEqual(1/8388608);
    }else expect(decoded[1]!.equals(decoded[0]!)).toBe(true);
