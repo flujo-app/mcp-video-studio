@@ -28,3 +28,30 @@ integration("HTML frame pixels repeat exactly and cancellation stops a stuck use
   clearTimeout(timer);
  }finally{await rm(root,{recursive:true,force:true});}
 },60000);
+
+integration("HTML uses seeded crypto and frame hooks, and cannot navigate, download or register service workers",async()=>{
+ const browser=await chromium.launch({headless:true,env:browserEnvironment()});try{
+  const context=await browser.newContext({serviceWorkers:"block",acceptDownloads:false}),page=await context.newPage();let downloads=0;page.on("download",()=>downloads++);
+  const frame=await prepareSandbox(browser,page,context,"<script>window.renderFrame=()=>{};</script>",12);
+  const check=await frame.evaluate(async()=>{
+   const w=window as unknown as {__studioFrame(t:number,f:number):void};
+   const results:Record<string,unknown>={};for(const name of ["setTimeout","setInterval","requestAnimationFrame"]){try{(window[name as keyof Window] as (callback:()=>void)=>void)(()=>{});results[name]=true;}catch{results[name]=false;}}
+   w.__studioFrame(1,30);const a=[...crypto.getRandomValues(new Uint8Array(16))],uuid=crypto.randomUUID();w.__studioFrame(1,30);const b=[...crypto.getRandomValues(new Uint8Array(16))],again=crypto.randomUUID();results.random=JSON.stringify(a)===JSON.stringify(b)&&uuid===again;results.clock=Date.now()===1000&&performance.now()===1000&&performance.timeOrigin===0;
+   try{await navigator.serviceWorker.register("data:text/javascript,self.onfetch=()=>{}");results.serviceWorker=true;}catch{results.serviceWorker=false;}
+   const link=document.createElement("a");link.href="data:text/plain,offline-download";link.download="blocked.txt";document.body.append(link);link.click();return results;
+  },undefined,false);
+  expect(check).toEqual({setTimeout:false,setInterval:false,requestAnimationFrame:false,random:true,clock:true,serviceWorker:false});
+  await new Promise(resolve=>setTimeout(resolve,100));expect(downloads).toBe(0);
+  await frame.evaluate(()=>{location.href="about:blank";},undefined,false).catch(()=>undefined);
+  for(let n=0;n<100&&!page.isClosed();n++)await new Promise(resolve=>setTimeout(resolve,10));
+  expect(page.isClosed()).toBe(true);
+ }finally{await browser.close();}
+},30000);
+integration("CSS animation screenshots retain the requested paused time instead of fast-forwarding",async()=>{
+ const root=await mkdtemp(path.join(os.tmpdir(),"studio-css-")),config=loadConfig({...process.env,VIDEO_STUDIO_DATA_DIR:root,VIDEO_STUDIO_SCRATCH_DIR:path.join(root,"scratch")}),fps={numerator:1,denominator:1};
+ try{
+  const document:AnimationDocument={id:"css",name:"CSS clock",mode:"html",durationTick:framesToTicks(2,fps),canvas:{width:32,height:32,background:"#000000"},seed:1,nodes:[],operations:[],html:'<style>html,body{margin:0;width:100%;height:100%}body{animation:color 2s linear both}@keyframes color{from{background:rgb(255,0,0)}to{background:rgb(0,0,255)}}</style><script>window.renderFrame=()=>{};</script>'};
+  const hashes=[];for(const name of ["one","two"]){const output=path.join(root,name+".mkv"),raw=output+".rgba";await renderAnimation(document,config,{fps,outputPath:output});await runChecked(config.ffmpegPath,["-hide_banner","-y","-i",output,"-f","rawvideo","-pix_fmt","rgba",raw]);const pixels=await readFile(raw),offset=32*32*4;expect(pixels[0]).toBeGreaterThan(240);expect(pixels[2]).toBeLessThan(10);expect(pixels[offset]).toBeGreaterThan(50);expect(pixels[offset]).toBeLessThan(220);expect(pixels[offset+2]).toBeGreaterThan(50);hashes.push(createHash("sha256").update(pixels).digest("hex"));}
+  expect(hashes[0]).toBe(hashes[1]);
+ }finally{await rm(root,{recursive:true,force:true});}
+},60000);

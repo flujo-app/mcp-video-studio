@@ -2,7 +2,7 @@ import {mkdtemp,readFile,writeFile,rm} from "node:fs/promises";import path from 
 import {expect,it} from "vitest";import {defaultClip,secondsToTicks} from "@mcp-video-studio/contracts";
 import {ProjectStore} from "@mcp-video-studio/core";import {importMedia,loadConfig,runChecked} from "@mcp-video-studio/media";import {renderSequence} from "@mcp-video-studio/renderer";
 const integration=process.env.RUN_FFMPEG_INTEGRATION==="1"?it:it.skip;
-integration("video ranges preserve decoded pixels across transitions/captions and continuous audio samples",async()=>{
+integration.each([false,true])("video ranges preserve exact frames and continuous audio (captions: %s)",async(withCaptions)=>{
  const root=await mkdtemp(path.join(os.tmpdir(),"studio-ranges-"));try{
   const store=await ProjectStore.create(path.join(root,"project"),"Ranges"),config=loadConfig({...process.env,VIDEO_STUDIO_DATA_DIR:root,VIDEO_STUDIO_SCRATCH_DIR:path.join(root,"scratch")});
   await store.replace(0,p=>{p.settings.raster={width:160,height:90};},{sequences:[],tracks:[],clips:[],media:[],animations:[],generatedArtifacts:[]});
@@ -13,7 +13,7 @@ integration("video ranges preserve decoded pixels across transitions/captions an
   const second={...structuredClone(first),id:crypto.randomUUID(),name:"Second",startTick:secondsToTicks(2)};second.transform.rotation=10;second.transform.scale=[.8,.8];
   await store.mutate(2,[{type:"clip.add",sequenceId:sequence.id,clip:first,mode:"overwrite"},{type:"clip.add",sequenceId:sequence.id,clip:second,mode:"overwrite"},
    {type:"transition.add",sequenceId:sequence.id,transition:{id:"cut",sequenceId:sequence.id,fromClipId:first.id,toClipId:second.id,type:"crossfade",durationTick:secondsToTicks(.4),parameters:{}}},
-   {type:"caption.add",sequenceId:sequence.id,caption:{id:"caption",trackId:captionTrack.id,startTick:secondsToTicks(.5),durationTick:secondsToTicks(2.5),text:"Range boundary",style:{fontFamily:"Arial",fontSize:12,color:"#ffffff",background:"#000000aa",align:"center",position:"bottom"}}},
+   ...(withCaptions?[{type:"caption.add" as const,sequenceId:sequence.id,caption:{id:"caption",trackId:captionTrack.id,startTick:secondsToTicks(.5),durationTick:secondsToTicks(2.5),text:"Range boundary",style:{fontFamily:"Arial",fontSize:12,color:"#ffffff",background:"#000000aa",align:"center" as const,position:"bottom" as const}}}]:[]),
    {type:"track.update",sequenceId:sequence.id,trackId:track.id,patch:{effects:[{id:"compressor",type:"compressor",version:1,enabled:true,parameters:{threshold:.05,ratio:4,attack:20,release:500}}]}}
   ]);
   const whole=path.join(root,"whole.mkv"),ranged=path.join(root,"ranged.mkv");
@@ -23,6 +23,7 @@ integration("video ranges preserve decoded pixels across transitions/captions an
   for(const [name,flags] of [["video",["-map","0:v:0","-pix_fmt","yuv420p","-f","rawvideo"]],["audio",["-map","0:a:0","-f","f32le"]]] as const){
    const decoded:Buffer[]=[];
    for(const file of [whole,ranged]){const raw=file+"."+name;await runChecked(config.ffmpegPath,["-hide_banner","-y","-i",file,...flags,raw]);decoded.push(await readFile(raw));}
+   expect(decoded[0]!.length).toBe(name==="audio"?192000*2*4:120*160*90*3/2);
    expect(decoded[1]!.length).toBe(decoded[0]!.length);
    if(name==="audio"){
     let maximum=0;

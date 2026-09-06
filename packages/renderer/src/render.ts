@@ -4,7 +4,7 @@ import { copyFile, link, mkdir, readdir, rename, rm, stat, utimes, writeFile } f
 import path from "node:path";
 import { framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import { prepareTransitionTimeline, transitionStyle, ProjectStore, sequenceDuration, sha256File, readJson, writeJson, confinedPath, StudioException } from "@mcp-video-studio/core";
-import { renderAnimation } from "@mcp-video-studio/animation";
+import { renderAnimation,ANIMATION_RENDERER_VERSION } from "@mcp-video-studio/animation";
 import { requireFfmpegFilters, filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
 import { audioAutomationFilters } from "./automation.js";
 import { atempoChain, audioEffectFilters, clipTransformFilters, videoEffectFilters } from "./filters.js";
@@ -174,7 +174,7 @@ async function buildInputs(project: StudioProject, sequence: Sequence, store: Pr
       const animationId = clip.source.animationId;
       const animation = project.animations.find((candidate) => candidate.id === animationId);
       if (!animation) throw new StudioException("ANIMATION_NOT_FOUND", `Animation not found: ${animationId}`, "input");
-      const key = canonicalHash({ animation, fps: project.settings.fps });
+      const key = canonicalHash({ animation, fps: project.settings.fps,renderer:ANIMATION_RENDERER_VERSION });
       const rendered = confinedPath(store.root,path.join(store.root,"cache","animations",key+".mkv"));
       await mkdir(path.dirname(rendered), { recursive: true });
       try { await sha256File(rendered); }
@@ -320,10 +320,10 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
   if(pass.video!==false){
   const outputWidth = maxWidth && width > maxWidth ? Math.max(2, Math.floor(maxWidth / 2) * 2) : width;
   const outputHeight = outputWidth !== width ? Math.max(2, Math.round(height * outputWidth / width / 2) * 2) : height;
-  statements.push(`[${videoLabel}]${outputWidth !== width ? `scale=${outputWidth}:${outputHeight}:flags=lanczos,` : ""}format=yuv420p${pass.range?",trim=start="+ticksToSeconds(pass.range.startTick)+":end="+ticksToSeconds(pass.range.endTick)+",setpts=PTS-STARTPTS":""}[vout]`);
+  statements.push(`[${videoLabel}]${outputWidth !== width ? `scale=${outputWidth}:${outputHeight}:flags=lanczos,` : ""}format=yuv420p${pass.range?",trim=start="+ticksToSeconds(pass.range.startTick)+":end="+ticksToSeconds(pass.range.endTick)+",setpts=PTS-STARTPTS":""},trim=end_frame=${frameCount}[vout]`);
   }
   if(pass.cachedAudioInput!==undefined)statements.push("["+pass.cachedAudioInput+":a]asetpts=N/SR/TB[aout]");
-  if(pass.cachedVideoInput!==undefined)statements.push("["+pass.cachedVideoInput+":v]setpts=PTS-STARTPTS[vout]");
+  if(pass.cachedVideoInput!==undefined)statements.push("["+pass.cachedVideoInput+":v]setpts=N/("+fps+"*TB),trim=end_frame="+frameCount+"[vout]");
   return { graph: statements.join(";\n"), videoLabel: "vout", audioLabel: "aout", durationTick: framesToTicks(frameCount, project.settings.fps), frameCount };
 }
 
@@ -342,7 +342,7 @@ async function continuousAudio(project:StudioProject,sequence:Sequence,store:Pro
   clips:clips.map(({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})=>({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})),
   tracks:sequence.tracks.map(({id,type,muted,solo,gainDb,pan,effects})=>({id,type,muted,solo,gainDb,pan,effects})),
   automation:sequence.automation,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
-  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:8});
+  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:9,animationRenderer:ANIMATION_RENDERER_VERSION});
  const cached=confinedPath(store.root,path.join(store.root,"cache","renders","audio-"+key+".wav"));
  let hit=false;try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
  if(!hit){
@@ -377,7 +377,7 @@ async function videoRanges(project:StudioProject,sequence:Sequence,store:Project
    settings:{raster:project.settings.raster,fps:project.settings.fps,background:project.settings.background,colorSpace:project.settings.colorSpace},
    media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),
    animations:project.animations.filter(animation=>animationIds.has(animation.id)),
-   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:8
+   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:9,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cached=confinedPath(store.root,path.join(store.root,"cache","renders","video-"+key+".mkv"));
   let hit=false;
@@ -393,7 +393,7 @@ async function videoRanges(project:StudioProject,sequence:Sequence,store:Project
   // Pin an immutable file for this render so concurrent cache pruning cannot remove its input.
   const pinned=path.join(scratch,"range-"+ranges.length+".mkv");
   await link(cached,pinned).catch(()=>copyFile(cached,pinned));
-  list.push("file 'range-"+ranges.length+".mkv'");
+  list.push("file 'range-"+ranges.length+".mkv'","duration "+ticksToSeconds(endTick-startTick));
   ranges.push({startTick,endTick,renderKey:key,cacheHit:hit});
   options.onProgress?.(.05+.65*(startFrame+Math.min(rangeFrames,totalFrames-startFrame))/totalFrames,"Video range "+ranges.length+(hit?" reused":" rendered"));
  }
@@ -426,7 +426,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: mediaHashes.get(asset.id), offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
     output: { videoRangeFrames:options.videoRangeFrames??null, maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
-    renderer: 8
+    renderer: 9,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cachePath = confinedPath(store.root,path.join(store.root,"cache","renders",renderKey+"."+preset.container));
   const durationTick = sequenceDuration(sequence);
@@ -482,7 +482,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     await writeFile(graphPath, graph, "utf8");
     const args = [
       ...inputArgs, await filterScriptOption(config.ffmpegPath), graphPath,
-      ...(!audioOnly ? ["-map", `[${compiled.videoLabel}]`, "-frames:v", String(compiled.frameCount), "-c:v", preset.videoCodec ?? "libx264"] : []),
+      ...(!audioOnly ? ["-map", `[${compiled.videoLabel}]`, "-c:v", preset.videoCodec ?? "libx264"] : []),
       "-map", `[${compiled.audioLabel}]`, "-t", String(ticksToSeconds(outputDurationTick)),
       ...(preset.videoCodec === "libx264" ? ["-preset", options.encoderPreset ?? "veryfast", "-crf", String(options.crf ?? preset.crf ?? 18)] : []),
       "-c:a", preset.audioCodec ?? "aac",

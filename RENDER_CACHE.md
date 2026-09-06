@@ -18,3 +18,5 @@ The range-cache.integration.test.ts fixture uses actual video, transformed clips
 - long-project.integration.test.ts exercises a 30-minute, 901-clip mixed-media project with video proxies, 54,000-frame output and a real browser edit. It runs separately on Linux Node 22 CI.
 
 A program preview and final export share the same renderer. Preview scaling or lossy output codecs require their own expected image/audio tolerances; no real-time browser audio-effects parity is claimed.
+
+Frame bounds are applied inside the final video filter, not with output-level `-frames:v`: FFmpeg can otherwise stop the entire output before audio completes. The concatenation manifest declares every range's frame-derived duration, and final video timestamps use the frame index. This avoids relying on Matroska duration rounding or omitted last-frame durations across FFmpeg versions. The real AV cache regression checks the exact expected decoded frame and sample counts, pixel equality and a maximum one-bit 24-bit PCM rounding difference, with and without captions.

@@ -8,6 +8,8 @@ import { sha256File, StudioException } from "@mcp-video-studio/core";
 import { ffmpegArtifact, type StudioConfig } from "@mcp-video-studio/media";
 import { evaluateAnimation } from "./evaluate.js";
 
+export const ANIMATION_RENDERER_VERSION=2;
+
 const RENDERER_HTML = `<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:transparent}canvas{display:block}</style></head><body><canvas id="canvas"></canvas><script>
 const canvas=document.getElementById('canvas');const ctx=canvas.getContext('2d');
 window.__setup=(w,h,bg)=>{canvas.width=w;canvas.height=h;window.__background=bg};
@@ -31,7 +33,7 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
   const scratch = path.join(config.scratchDir, `animation-${randomUUID()}`);
   const frames = path.join(scratch, "frames");
   await mkdir(frames, { recursive: true });
-  const browser = await chromium.launch({ headless: true, env: browserEnvironment() });
+  const browser = await chromium.launch({ headless: true, env: browserEnvironment() }).catch(async error=>{await rm(scratch,{recursive:true,force:true}).catch(()=>undefined);throw error;});
   const context = await browser.newContext({ serviceWorkers: "block", acceptDownloads: false, viewport: { width: document.canvas.width, height: document.canvas.height }, deviceScaleFactor: 1 });
   const page = await context.newPage();
   page.setDefaultTimeout(10000);
@@ -53,14 +55,15 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
         await page.evaluate(nodes => { (window as unknown as {__applyState:(nodes:unknown)=>void}).__applyState(nodes); }, state, false);
       } else {
         await target.evaluate(async state => {
-          const host=window as unknown as {__studioFrame:(time:number,frame:number)=>void;renderFrame?:(state:unknown)=>unknown};
+          const host=window as unknown as {__studioFrame:(time:number,frame:number)=>void;__studioFailure?:string;renderFrame?:(state:unknown)=>unknown};
+          if(host.__studioFailure)throw new Error(host.__studioFailure);
           host.__studioFrame(state.time,state.frame);
           for(const animation of globalThis.document.getAnimations()){animation.pause();animation.currentTime=state.time*1000;}
           if(typeof host.renderFrame!=="function")throw new Error("HTML animation must define renderFrame(state).");
           await host.renderFrame(state);
         }, { frame, tick, time: tick / 35_280_000, seed: document.seed }, false);
       }
-      await page.screenshot({ path: path.join(frames, `${String(frame).padStart(8, "0")}.png`), type: "png", omitBackground: document.canvas.background === "transparent", animations: "disabled", caret: "hide" });
+      await page.screenshot({ path: path.join(frames, `${String(frame).padStart(8, "0")}.png`), type: "png", omitBackground: document.canvas.background === "transparent", animations: "allow", caret: "hide" });
       options.onProgress?.((frame + 1) / (frameCount + 1));
     }
     const fpsText = `${options.fps.numerator}/${options.fps.denominator}`;

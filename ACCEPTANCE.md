@@ -93,7 +93,7 @@ Status: in-progress.
 
 - Sandbox adversarial network/parent/storage/worker/popup tests; nonblank deterministic pixel hashes and stuck-frame cancellation pass.
 
-Remaining: Virtualize or forbid remaining timers/RAF/crypto and add explicit navigation/download/service-worker probes.
+Verified by tests/sandbox.integration.test.ts: seeded crypto/UUID, forbidden timers/RAF, navigation closure, download/service-worker rejection and exact requested CSS animation timestamps. Remaining: independent final security review with the full production fixture.
 
 ## Issue 4: Animation clips remain ordinary trim/split/speed/effect/transition-capable timeline clips.
 
