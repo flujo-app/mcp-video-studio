@@ -1,3 +1,5 @@
+import {listExportHistory,getExportHistory,queueExport} from './provenance.js';
+import {queueArchive,listArchiveJobs} from './archive-jobs.js';
 import { createReadStream } from "node:fs";
 import { readFile, readdir, stat } from "node:fs/promises";
 import { createServer, type IncomingMessage, type ServerResponse } from "node:http";
@@ -73,6 +75,7 @@ export async function startGateway(runtime: StudioRuntime, token: string): Promi
         res.write(`event: ready\ndata: {}\n\n`);
         clients.add(res); req.once("close", () => clients.delete(res)); return;
       }
+      if(req.method === "GET" && url.pathname === "/api/archive/operations"){json(res,200,await listArchiveJobs(runtime.config));return;}
       if (req.method === "GET" && url.pathname === "/api/projects") { json(res, 200, await runtime.listProjects()); return; }
       if (req.method === "GET" && url.pathname === "/api/project") { json(res, 200, await runtime.getProject(url.searchParams.get("projectPath") ?? "")); return; }
       if (req.method === "GET" && url.pathname === "/api/jobs") { json(res, 200, { success: true, jobs: runtime.jobs.list() }); return; }
@@ -84,9 +87,9 @@ export async function startGateway(runtime: StudioRuntime, token: string): Promi
       if (req.method === "POST") {
         if (!req.headers["content-type"]?.toLowerCase().startsWith("application/json")) { json(res, 415, { success: false, error: { code: "CONTENT_TYPE", message: "Content-Type must be application/json." } }); return; }
         const input = await body(req);
-        if(url.pathname === "/api/archive/export"){json(res,200,await exportProjectArchive(String(input.projectPath),String(input.outputPath),Number(input.expectedRevision)));return;}
+        if(url.pathname === "/api/archive/export"){json(res,200,await queueArchive(runtime,"export",{projectPath:String(input.projectPath),outputPath:String(input.outputPath),expectedRevision:Number(input.expectedRevision)}));return;}
         if(url.pathname === "/api/archive/inspect"){json(res,200,await inspectProjectArchive(String(input.filePath)));return;}
-        if(url.pathname === "/api/archive/import"){json(res,200,await importProjectArchive(String(input.filePath),String(input.destinationPath)));return;}
+        if(url.pathname === "/api/archive/import"){json(res,200,await queueArchive(runtime,"import",{filePath:String(input.filePath),destinationPath:String(input.destinationPath)}));return;}
 
         if (url.pathname.startsWith("/api/features/")) { const name = url.pathname.slice("/api/features/".length); if (!Object.hasOwn(featureSchemas, name)) throw new Error("Unknown feature."); json(res, 200, await invokeFeature(runtime, name as FeatureName, input)); return; }
         if (url.pathname === "/api/project/create") { json(res, 200, await runtime.createProject(String(input.name ?? "Untitled project"), typeof input.projectPath === "string" ? input.projectPath : undefined)); return; }
@@ -106,6 +109,12 @@ export async function startGateway(runtime: StudioRuntime, token: string): Promi
         if (url.pathname === "/api/generated/regenerate") { json(res, 202, await runtime.regenerateGeneratedArtifact({ projectPath: String(input.projectPath), expectedRevision: Number(input.expectedRevision), artifactId: String(input.artifactId), autoActivate:input.autoActivate===true, ...(typeof input.parentVersionId==="string"?{parentVersionId:input.parentVersionId}:{}), ...(input.region&&typeof input.region==="object"?{region:{offsetTick:Number((input.region as Record<string,unknown>).offsetTick),durationTick:Number((input.region as Record<string,unknown>).durationTick)}}:{}), ...(input.requestPatch && typeof input.requestPatch === "object" ? { requestPatch: input.requestPatch as never } : {}) })); return; }
         if (url.pathname === "/api/generated/review") { json(res, 200, await runtime.reviewGeneratedVersion({ projectPath: String(input.projectPath), expectedRevision: Number(input.expectedRevision), artifactId: String(input.artifactId), versionId: String(input.versionId), action: input.action === "approve" ? "approve" : input.action === "reject" ? "reject" : "activate", reviewer: String(input.reviewer || "Studio user"), ...(typeof input.note === "string" && input.note ? { note: input.note } : {}) })); return; }
         if (url.pathname === "/api/preview") { json(res, 202, await runtime.renderPreview({ projectPath: String(input.projectPath), sequenceId: String(input.sequenceId) })); return; }
+        if(url.pathname === "/api/media/inspect"){json(res,200,await runtime.inspect(String(input.projectPath),Array.isArray(input.mediaIds)?input.mediaIds.map(String):undefined));return;}
+        if(url.pathname === "/api/media/relink"){json(res,200,await runtime.relink({projectPath:String(input.projectPath),mediaId:String(input.mediaId),filePath:String(input.filePath),expectedRevision:Number(input.expectedRevision)}));return;}
+        if(url.pathname === "/api/media/consolidate"){json(res,200,await runtime.queueConsolidation({projectPath:String(input.projectPath),expectedRevision:Number(input.expectedRevision),...(Array.isArray(input.mediaIds)?{mediaIds:input.mediaIds.map(String)}:{})}));return;}
+        if(url.pathname==="/api/exports/history"){json(res,200,await listExportHistory(runtime.config,String(input.projectPath)));return;}
+        if(url.pathname==="/api/exports/detail"){json(res,200,await getExportHistory(runtime.config,String(input.exportId)));return;}
+        if(url.pathname==="/api/exports/reproduce"){json(res,202,await queueExport(runtime,{projectPath:String(input.projectPath),reproduceId:String(input.exportId),outputPath:String(input.outputPath),sequenceId:'',presetId:''}));return;}
         if (url.pathname === "/api/render") { json(res, 202, await runtime.render({ projectPath: String(input.projectPath), sequenceId: String(input.sequenceId), presetId: String(input.presetId), outputPath: String(input.outputPath) })); return; }
         if (url.pathname === "/api/qc") { json(res, 202, await runtime.qc({ projectPath: String(input.projectPath), sequenceId: String(input.sequenceId), filePath: String(input.filePath) })); return; }
         if (url.pathname === "/api/jobs/cancel") { json(res, 200, { success: true, job: await runtime.jobs.cancel(String(input.jobId)) }); return; }

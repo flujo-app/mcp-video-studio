@@ -372,7 +372,7 @@ export type StudioResult<T> = ({ success: true } & T) | FailureResult;
 
 export interface JobRecord {
   id: UUID;
-  type: "probe" | "proxy" | "thumbnail" | "waveform" | "preview" | "render" | "animation" | "generation" | "qc";
+  type: "probe" | "proxy" | "thumbnail" | "waveform" | "preview" | "render" | "animation" | "generation" | "qc" | "archive" | "media";
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   progress: number;
   message: string;

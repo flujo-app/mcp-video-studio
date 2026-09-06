@@ -1,7 +1,9 @@
+import {queueExport,recoverExportHistory} from './provenance.js';
+import {recoverArchiveJobs} from './archive-jobs.js';
 import {assertSafeGenerationInput,assertSafeGenerationOutput,generationSecrets} from "./generation-privacy.js";
 import { withCaptionRegion, fitGeneratedAudio } from "./generation-files.js";
 import { createHash, randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { stat,rm } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "patchright";
 import {
@@ -26,7 +28,7 @@ import {
   type StudioProject,
   type TrackType
 } from "@mcp-video-studio/contracts";
-import { asStudioError, atomicWrite, discoverProjects, ProjectStore, projectSummary, StudioException, validateProject } from "@mcp-video-studio/core";
+import { asStudioError, atomicWrite, confinedPath, discoverProjects, ProjectStore, projectSummary, StudioException, validateProject } from "@mcp-video-studio/core";
 import {
   createProxy,
   createThumbnail,
@@ -125,6 +127,7 @@ export class StudioRuntime {
   }
 
   async initialize(): Promise<void> {
+    await recoverArchiveJobs(this.config);await recoverExportHistory(this.config);
     await this.jobs.initialize();
   }
 
@@ -233,6 +236,9 @@ export class StudioRuntime {
   async relink(input: { projectPath: string; mediaId: string; filePath: string; expectedRevision: number }): Promise<Record<string, unknown>> {
     const store = this.store(input.projectPath);
     const result = await relinkMedia(store, input.mediaId, input.filePath, input.expectedRevision, this.config);
+    // IDs imported from a project are untrusted path components; clear only an owned proxy directory.
+    if(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(result.media.id)){const proxy=confinedPath(store.root,path.join(store.root,"proxies",result.media.id));const current=await store.read();if(!current.media.some(asset=>{const relative=path.relative(proxy,mediaPath(store,asset));return relative===''||(!relative.startsWith('..')&&!path.isAbsolute(relative));}))await rm(proxy,{recursive:true,force:true});}
+
     return { success: true, ...result, projectPath: store.root, project: await store.read() };
   }
 
@@ -241,6 +247,8 @@ export class StudioRuntime {
     const result = await consolidateMedia(store, input.mediaIds, input.expectedRevision);
     return { success: true, ...result, projectPath: store.root, project: await store.read() };
   }
+
+  async queueConsolidation(input:{projectPath:string;mediaIds?:string[];expectedRevision:number}):Promise<Record<string,unknown>>{const store=this.store(input.projectPath),project=await store.read();if(project.revision!==input.expectedRevision)throw new StudioException("REVISION_CONFLICT","Project changed before consolidation was queued.","conflict");const job=await this.jobs.enqueue("media","Consolidating verified linked media",async({signal,progress,commit})=>{const result=await consolidateMedia(store,input.mediaIds,input.expectedRevision,signal,{progress,commit});return{success:true,...result,projectPath:store.root,project:await store.read()};});return{success:true,job};}
 
   async inspect(projectPath: string, mediaIds?: string[]): Promise<Record<string, unknown>> {
     const store = this.store(projectPath);
@@ -570,17 +578,7 @@ export class StudioRuntime {
     return { success: true, job };
   }
 
-  async render(input: { projectPath: string; sequenceId: string; presetId: string; outputPath: string }): Promise<Record<string, unknown>> {
-    const store = this.store(input.projectPath);
-    const job = await this.jobs.enqueue("render", "Waiting to render", ({ signal, progress }) => renderSequence(store, this.config, {
-      sequenceId: input.sequenceId,
-      presetId: input.presetId,
-      outputPath: path.resolve(input.outputPath),
-      signal,
-      onProgress: (value, message) => void progress(value, message)
-    }));
-    return { success: true, job };
-  }
+  async render(input: { projectPath:string;sequenceId:string;presetId:string;outputPath:string;expectedRevision?:number }):Promise<Record<string,unknown>>{return queueExport(this,input);}
 
   async renderPreview(input: { projectPath: string; sequenceId: string }): Promise<Record<string, unknown>> {
     const store = this.store(input.projectPath);

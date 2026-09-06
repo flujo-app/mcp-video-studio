@@ -79,11 +79,54 @@ integration(
       const messages: string[] = [];
       page.on("console", (msg) => messages.push(msg.text()));
       page.on("pageerror", (error) => messages.push(error.message));
+      await page.addInitScript(() => {
+        const Original = window.EventSource;
+        window.EventSource = class extends Original {
+          constructor(url: string | URL, config?: EventSourceInit) {
+            super(url, config);
+            (
+              window as unknown as { fixtureEvents: EventSource }
+            ).fixtureEvents = this;
+          }
+        };
+      });
       await page.goto(studioUrl);
       await page.getByText("Project loaded", { exact: true }).waitFor();
       await page
         .getByRole("button", { name: "Generate 3", exact: true })
         .click();
+      let releaseStale = () => {},
+        heldOldRefresh = false;
+      await page.route("**/api/project?*", async (route) => {
+        if (heldOldRefresh) {
+          await route.continue();
+          return;
+        }
+        heldOldRefresh = true;
+        const response = await route.fetch();
+        await new Promise<void>((resolve) => (releaseStale = resolve));
+        await route.fulfill({ response });
+      });
+      // Inject a delayed refresh notification through the real EventSource handler, then deliver its old HTTP response after later edits.
+      await page.evaluate(
+        () => {
+          (
+            window as unknown as { fixtureEvents: EventSource }
+          ).fixtureEvents.dispatchEvent(
+            new MessageEvent("job", {
+              data: JSON.stringify({
+                id: "delayed-refresh-fixture",
+                type: "generation",
+                status: "completed",
+              }),
+            }),
+          );
+        },
+        undefined,
+        false,
+      );
+      await until(() => heldOldRefresh);
+
       const dialog = page.getByRole("dialog", {
         name: "Review, revise, and regenerate",
       });
@@ -112,9 +155,21 @@ integration(
         .getByRole("button", { name: "Generate revised draft", exact: true })
         .click();
       await until(async () => {
+        const visibleErrors = await page
+          .locator('[role="alert"]')
+          .allTextContents();
+        if (visibleErrors.some((text) => text.trim()))
+          throw new Error(
+            "Generation browser error: " + visibleErrors.join(" | "),
+          );
         const artifact = (await f.store.read()).generatedArtifacts.find(
           (a) => a.kind === "narration",
         )!;
+        if (artifact.versions[1]?.status === "failed")
+          throw new Error(
+            "Generated browser draft failed: " +
+              JSON.stringify(artifact.versions[1].error),
+          );
         return (
           artifact.versions.length === 2 &&
           artifact.versions[1]!.status === "draft"
@@ -208,6 +263,9 @@ integration(
             .versions.find((v) => v.id === second.id)!.review?.note ===
           "Human comparison: second take preferred.",
       );
+      expect(heldOldRefresh).toBe(true);
+      releaseStale();
+      await page.unroute("**/api/project?*");
       for (const version of [second, first, second]) {
         const row = narration
           .locator(".version-row")
@@ -218,12 +276,34 @@ integration(
             exact: true,
           })
           .click();
-        await until(
-          async () =>
+        await until(async () => {
+          const alerts = await page.locator('[role="alert"]').allTextContents();
+          if (alerts.some((text) => text.trim()))
+            throw new Error("Version activation error: " + alerts.join(" | "));
+          return (
             (await f.store.read()).generatedArtifacts.find(
               (a) => a.id === artifact.id,
-            )!.activeVersionId === version.id,
-        );
+            )!.activeVersionId === version.id
+          );
+        });
+      }
+      for (const [version, label, status] of [
+        [first, "Reject this version", "rejected"],
+        [second, "Approve this version", "approved"],
+      ] as const) {
+        const row = narration
+          .locator(".version-row")
+          .filter({ hasText: version.id.slice(0, 8) });
+        await row.getByRole("button", { name: label, exact: true }).click();
+        await until(async () => {
+          const current = (await f.store.read()).generatedArtifacts.find(
+            (a) => a.id === artifact.id,
+          )!;
+          expect(current.activeVersionId).toBe(second.id);
+          return (
+            current.versions.find((v) => v.id === version.id)!.status === status
+          );
+        });
       }
       const captions = page.getByRole("article", {
         name: "Review Fixture captions",
@@ -268,6 +348,21 @@ integration(
       );
       expect(messages.join("\n")).not.toContain(providerSecret);
       expect(stderr).not.toContain(providerSecret);
+      const storage = await page.evaluate(
+        () =>
+          JSON.stringify({
+            local: { ...localStorage },
+            session: { ...sessionStorage },
+          }),
+        undefined,
+        false,
+      );
+      for (const secret of [
+        providerSecret,
+        encodeURIComponent(providerSecret),
+        Buffer.from(providerSecret).toString("base64"),
+      ])
+        expect(storage).not.toContain(secret);
       expect(await secretFiles(f.root)).toEqual([]);
       await page
         .getByRole("button", { name: "Close dialog", exact: true })

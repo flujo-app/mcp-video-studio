@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { copyFile, link, mkdir, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
-import { sequenceDependencies, prepareTransitionTimeline, transitionStyle, ProjectStore, sequenceDuration, sha256File, readJson, writeJson, confinedPath, StudioException } from "@mcp-video-studio/core";
+import { sequenceDependencies, prepareTransitionTimeline, transitionStyle, ProjectStore, validateProject, sequenceDuration, sha256File, readJson, writeJson, confinedPath, StudioException } from "@mcp-video-studio/core";
 import { renderAnimation,ANIMATION_RENDERER_VERSION } from "@mcp-video-studio/animation";
 import { requireFfmpegFilters, filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
 import { audioParameterVariants, maskedVariantGraph } from "./audio-ranges.js";
@@ -15,6 +15,12 @@ export interface RenderOptions {
   presetId: string;
   outputPath: string;
   expectedRevision?: number;
+  /** Internal validated history snapshot; never supplied as raw MCP input. */
+  projectSnapshot?: StudioProject;
+  /** Internal owned staging directory for a recoverable export operation. */
+  stagingDirectory?: string;
+  expectedSourceHashes?: Record<string,string>;
+  publish?: (sourcePath:string,result:Record<string,unknown>)=>Promise<Record<string,unknown>>;
   /** Frame-aligned cache ranges; 0 disables range caching for parity verification. */
   videoRangeFrames?: number;
   maxWidth?: number;
@@ -177,7 +183,7 @@ async function buildInputs(project: StudioProject, sequence: Sequence, store: Pr
       const preset=project.exportPresets.find(preset=>preset.container==="mkv"&&preset.videoCodec==="ffv1"&&preset.audioCodec==="flac");
       if(!preset)throw new StudioException("NESTED_RENDER_PRESET","Add an FFV1/FLAC Matroska preset to render nested sequences.","input");
       const rendered=path.join(streams.scratch,"nested-"+randomUUID()+".mkv");
-      const result=await renderSequence(store,config,{sequenceId:clip.source.sequenceId,presetId:preset.id,outputPath:rendered,expectedRevision:project.revision,...(signal?{signal}:{})});
+      const result=await renderSequence(store,config,{sequenceId:clip.source.sequenceId,presetId:preset.id,outputPath:rendered,expectedRevision:project.revision,projectSnapshot:project,...(signal?{signal}:{})});
       const media={id:clip.source.sequenceId,kind:"video" as const,probe:result.probe as MediaAsset["probe"]};
       if(streams.video!==false)inputs.push({args:["-an","-i",rendered],clip,media,inputIndex:index++,path:rendered,streams:"video"});
       if(streams.audio!==false)inputs.push({args:["-vn","-i",rendered],clip,media,inputIndex:index++,path:rendered,streams:"audio"});
@@ -455,7 +461,7 @@ async function videoRanges(project:StudioProject,sequence:Sequence,store:Project
 }
 
 export async function renderSequence(store: ProjectStore, config: StudioConfig, options: RenderOptions): Promise<Record<string, unknown>> {
-  const project = await store.read();
+  const project = options.projectSnapshot?validateProject(structuredClone(options.projectSnapshot)):await store.read();
   if (options.expectedRevision !== undefined && project.revision !== options.expectedRevision) {
     throw new StudioException("REVISION_CONFLICT", `Preview requested for revision ${options.expectedRevision}, but the project is now revision ${project.revision}.`, "conflict", { expectedRevision: options.expectedRevision, actualRevision: project.revision });
   }
@@ -475,6 +481,9 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
    if(samePath(font,options.outputPath))throw new StudioException("SOURCE_OUTPUT_OVERWRITE","Export cannot overwrite a caption font.","input");
    captionFonts.set(caption.id,font);mediaHashes.set("caption-font:"+caption.id,(await sha256File(font,options.signal)).sha256);
   }
+  const sourceHashes=Object.fromEntries(mediaHashes);
+  if(options.expectedSourceHashes&&canonicalHash(sourceHashes)!==canonicalHash(options.expectedSourceHashes))throw new StudioException("HISTORICAL_SOURCE_CHANGED","A source or caption font differs from the saved export. Restore the recorded input files before reproducing it.","conflict");
+  const verifySources=async()=>{for(const media of project.media.filter(asset=>mediaHashes.has(asset.id)))if((await sha256File(mediaPath(store,media),options.signal)).sha256!==mediaHashes.get(media.id))throw new StudioException("SOURCE_CHANGED_DURING_RENDER","A media source changed during rendering. The previous export was preserved; retry after the source is stable.","conflict");for(const [id,font]of captionFonts)if((await sha256File(font,options.signal)).sha256!==mediaHashes.get("caption-font:"+id))throw new StudioException("SOURCE_CHANGED_DURING_RENDER","A caption font changed during rendering. Retry with stable font assets.","conflict");};
   confinedPath(store.root,path.join(store.root,"cache","renders"));
 
   const renderKey = canonicalHash({
@@ -495,27 +504,19 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
   options.onProgress?.(0.02, "Checking render cache");
   const cached = await stat(cachePath).then((info) => info.isFile() && info.size > 0).catch(() => false);
   if (cached) {
+    let verified:Record<string,unknown>|undefined;
     try {
       const [metadata,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cachePath+".json")),sha256File(cachePath,options.signal)]);
       if(metadata.sha256!==hash.sha256||metadata.bytes!==hash.bytes)throw new Error("Render cache checksum changed.");
       const probe=await probeMedia(cachePath,config,options.signal);
-      await publishFile(cachePath, options.outputPath);
-      const now = new Date();
-      await utimes(cachePath, now, now).catch(() => undefined);
-
-      options.onProgress?.(1, "Reused cached render");
-      return {
-        success: true, cacheHit: true, cachePath, outputPath: path.resolve(options.outputPath), projectId: project.projectId, revision: project.revision,
-        sequenceId: sequence.id, renderKey, frameCount, durationTick: outputDurationTick, probe, ...hash, durationMs: 0
-      };
-    } catch (error) {
-      if (options.signal?.aborted) throw error;
-      await rm(cachePath, { force: true }).catch(() => undefined);
-    }
+      verified={success:true,cacheHit:true,cachePath,outputPath:path.resolve(options.outputPath),projectId:project.projectId,revision:project.revision,sequenceId:sequence.id,renderKey,frameCount,durationTick:outputDurationTick,probe,...hash,durationMs:0,sourceHashes};
+    } catch(error){if(options.signal?.aborted)throw error;await rm(cachePath,{force:true}).catch(()=>undefined);}
+    // Publication errors must propagate, never invalidate a valid cache and publish twice.
+    if(verified){await verifySources();options.signal?.throwIfAborted();const receipt=options.publish?await options.publish(cachePath,verified):(await publishFile(cachePath,options.outputPath),{});const now=new Date();await utimes(cachePath,now,now).catch(()=>undefined);options.onProgress?.(1,"Reused cached render");return {...verified,...receipt};}
   }
   const scratch = path.join(config.scratchDir, `render-${randomUUID()}`);
   const output=path.resolve(options.outputPath);
-  const stagedOutput=path.join(path.dirname(output),"."+path.basename(output)+"."+randomUUID()+".review."+preset.container);
+  const stagedOutput=path.join(options.stagingDirectory??path.dirname(output),"."+path.basename(output)+"."+randomUUID()+".review."+preset.container);
   await mkdir(scratch, { recursive: true });
   try {
     options.onProgress?.(0.01, "Planning render");
@@ -560,18 +561,14 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     options.onProgress?.(0.97, "Verifying output");
     const [probe, hash] = await Promise.all([probeMedia(stagedOutput, config, options.signal), sha256File(stagedOutput,options.signal)]);
     if(!probe.hasAudio||!audioOnly&&!probe.hasVideo||Math.abs(probe.durationTick-outputDurationTick)>Math.max(ticksPerFrame(project.settings.fps),ticksPerSample(project.settings.sampleRate)))throw new StudioException("INVALID_RENDER_OUTPUT","Rendered streams or duration do not match the requested sequence.","runtime");
-    for(const media of project.media.filter(asset=>mediaHashes.has(asset.id)))if((await sha256File(mediaPath(store,media),options.signal)).sha256!==mediaHashes.get(media.id))throw new StudioException("SOURCE_CHANGED_DURING_RENDER","A media source changed during rendering. The previous export was preserved; retry after the source is stable.","conflict");
-    for(const [id,font]of captionFonts)if((await sha256File(font,options.signal)).sha256!==mediaHashes.get("caption-font:"+id))throw new StudioException("SOURCE_CHANGED_DURING_RENDER","A caption font changed during rendering. Retry with stable font assets.","conflict");
+    await verifySources();
     await publishFile(stagedOutput, cachePath);
     await writeFile(`${cachePath}.json`, `${JSON.stringify({ renderKey, projectId: project.projectId, sequenceId: sequence.id, createdAt: new Date().toISOString(), presetId: preset.id, frameCount: compiled.frameCount, durationTick: outputDurationTick, sha256: hash.sha256, bytes: hash.bytes }, null, 2)}\n`, "utf8");
-    await rename(stagedOutput,output);
-    const cache = await pruneRenderCache(store.root, config.cacheMaxBytes, cachePath);
-    options.onProgress?.(1, "Completed");
-    return {
-      success: true, cacheHit: false, cachePath, outputPath: path.resolve(options.outputPath), projectId: project.projectId, revision: project.revision,
-      sequenceId: sequence.id, renderKey, frameCount: compiled.frameCount, durationTick: outputDurationTick, probe, ...hash,
-      videoRanges:cachedVideo?.ranges??[], audioCache:cachedAudio?{cacheHit:cachedAudio.cacheHit,renderKey:cachedAudio.renderKey}:null, ffmpegCommand: { executable: config.ffmpegPath, args }, durationMs: result.durationMs, cache
-    };
+    options.signal?.throwIfAborted();
+    const rendered={success:true,cacheHit:false,cachePath,outputPath:output,projectId:project.projectId,revision:project.revision,sequenceId:sequence.id,renderKey,frameCount:compiled.frameCount,durationTick:outputDurationTick,probe,...hash,sourceHashes,videoRanges:cachedVideo?.ranges??[],audioCache:cachedAudio?{cacheHit:cachedAudio.cacheHit,renderKey:cachedAudio.renderKey}:null,ffmpegCommand:{executable:config.ffmpegPath,args},durationMs:result.durationMs};
+    const receipt=options.publish?await options.publish(stagedOutput,rendered):(await rename(stagedOutput,output),{});
+    const cache = await pruneRenderCache(store.root, config.cacheMaxBytes, cachePath).catch(()=>undefined);
+    options.onProgress?.(1,"Completed");return {...rendered,...receipt,...(cache?{cache}:{})};
   } finally {
     await rm(stagedOutput,{force:true}).catch(()=>undefined);
     await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
