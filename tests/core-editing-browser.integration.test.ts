@@ -72,6 +72,7 @@ integration(
       viewport: { width: 1600, height: 1200 },
     });
     page.setDefaultTimeout(12000);
+    const pendingTileRoutes = new Set<Promise<void>>();
     const errors: string[] = [],
       requests: string[] = [];
     page.on("pageerror", (e) => errors.push(e.message));
@@ -525,6 +526,34 @@ integration(
         .locator(".timeline-tiles img")
         .first()
         .getAttribute("data-tile-span");
+      // Delay only newly requested scale tiles beyond the assertion library's
+      // default poll interval. The service has a separate bounded render deadline.
+      let delayedTiles = 0, delayNewScaleTiles = true;
+      const delayTileResponse = async (route: import("patchright").Route) => {
+        const query = new URL(route.request().url()).searchParams;
+        if (delayNewScaleTiles &&
+            ["timeline-thumbnail", "timeline-waveform"].includes(query.get("kind") ?? "") &&
+            query.get("spanSeconds") !== initialSpan) {
+          const task = (async () => {
+            delayedTiles++;
+            const response = await route.fetch();
+            await new Promise(resolve => setTimeout(resolve, 1500));
+            await route.fulfill({ response });
+          })();
+          pendingTileRoutes.add(task);
+          try { await task; } finally { pendingTileRoutes.delete(task); }
+        } else await route.continue();
+      };
+      await page.route("**/media?**", delayTileResponse);
+      const tileResponses = new Map<string, { status: number; type: string }>();
+      const recordTileResponse = (response: import("patchright").Response) => {
+        const query = new URL(response.url()).searchParams;
+        if (query.get("kind") === "timeline-thumbnail") {
+          tileResponses.set(response.url(), { status: response.status(),
+            type: response.headers()["content-type"] ?? "" });
+        }
+      };
+      page.on("response", recordTileResponse);
       await page.getByLabel("Zoom", { exact: true }).press("End");
       await expect
         .poll(() =>
@@ -534,18 +563,37 @@ integration(
             .getAttribute("data-tile-span"),
         )
         .not.toBe(initialSpan);
-      await expect
-        .poll(() =>
-          page
-            .locator(".timeline-tiles img")
-            .evaluateAll(
-              (images) =>
-                images.filter(
-                  (e) => (e as HTMLImageElement).naturalWidth === 320,
-                ).length,
-            ),
-        )
-        .toBeGreaterThan(0);
+      // Select the actual mounted new-scale thumbnail. A pending response from
+      // an old scale/clip must not stand in for this resource's successful decode.
+      const decodedTile = await page.evaluate(async previousSpan => {
+        const image = [...document.querySelectorAll<HTMLImageElement>(".timeline-tiles img")]
+          .find(candidate => candidate.dataset.tileSpan !== previousSpan &&
+            new URL(candidate.src).searchParams.get("kind") === "timeline-thumbnail");
+        if (!image) throw new Error("No new-scale thumbnail was mounted.");
+        const source = image.src;
+        let timer: ReturnType<typeof setTimeout> | undefined;
+        try {
+          await Promise.race([image.decode(), new Promise<never>((_, reject) => {
+            timer = setTimeout(() => reject(new Error(
+              "New-scale thumbnail exceeded the tile service's 30-second deadline.")), 30000);
+          })]);
+        } finally { clearTimeout(timer); }
+        if (!image.isConnected || image.src !== source)
+          throw new Error("New-scale thumbnail changed before decode completed.");
+        return { source, width: image.naturalWidth, height: image.naturalHeight,
+          span: image.dataset.tileSpan, complete: image.complete };
+      }, initialSpan);
+      expect(tileResponses.get(decodedTile.source)).toEqual({
+        status: 200, type: expect.stringContaining("image/png")
+      });
+      expect({ width: decodedTile.width, height: decodedTile.height,
+        complete: decodedTile.complete }).toEqual({ width: 320, height: 45, complete: true });
+      expect(decodedTile.span).not.toBe(initialSpan);
+      expect(delayedTiles).toBeGreaterThan(0);
+      page.off("response", recordTileResponse);
+      delayNewScaleTiles = false;
+      await Promise.all([...pendingTileRoutes]);
+      await page.unroute("**/media?**", delayTileResponse);
       await page.getByLabel("Zoom", { exact: true }).press("Home");
       // Timeline undo/redo is persisted; reloading does not create a private UI history.
       project = await read(page);
@@ -823,6 +871,7 @@ integration(
       ).toEqual([]);
       expect(errors).toEqual([]);
     } finally {
+      await Promise.allSettled([...pendingTileRoutes]);
       await browser.close();
       await client.close();
       if (!process.env.MINUTE_ACCEPTANCE_KEEP)

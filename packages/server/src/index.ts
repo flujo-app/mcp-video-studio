@@ -25,9 +25,13 @@ async function main(): Promise<void> {
   let closeTransport: (() => Promise<void>) | undefined;
   let closing: Promise<void> | undefined;
   const shutdown = () => closing ??= (async () => {
-    await closeTransport?.();
-    await gateway.close().catch(() => undefined);
-    await runtime.jobs.close();
+    // Abort owned jobs immediately; gateway thumbnail decoders also need time to close.
+    // A stdio client may terminate this process while waiting for EOF shutdown.
+    await Promise.all([
+      runtime.jobs.close(),
+      closeTransport?.(),
+      gateway.close().catch(() => undefined),
+    ]);
   })();
   process.once("SIGINT", () => void shutdown());
   process.once("SIGTERM", () => void shutdown());
