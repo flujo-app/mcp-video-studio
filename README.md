@@ -227,3 +227,5 @@ The doctor reports a missing required filter before a caption job starts. See
 [Homebrew's full formula](https://formulae.brew.sh/formula/ffmpeg-full).
 The renderer detects current FFmpeg script-file support and retains compatibility
 with older distributions using the former filter_complex_script option.
+
+Audio editing supports sample-aligned gain, pan and effect ranges, voiceover ducking, track and final mix processing, and decoded preview meters. See [audio workflow and measured preview/export tolerances](AUDIO_ACCEPTANCE.md) for controls, MCP tools, processing limits and reproducible acceptance tests.

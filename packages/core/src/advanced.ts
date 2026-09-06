@@ -1,9 +1,11 @@
+import { duckAudio } from "./audio-ducking.js";
+import { audioParameterRange } from "./audio-ranges.js";
 import { randomUUID } from "node:crypto";
 import { defaultTransform, ticksPerSample, type AdvancedProjectCommand, type AnimationDocument, type Clip, type ProjectCommand, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import {spliceEnvelope} from "./envelope.js";
 import { StudioException } from "./errors.js";
 
-const kinds = new Set(["clip.slip", "clip.roll", "clip.slide", "gap.remove", "audio.gain.range", "animation.node.add", "animation.node.update", "animation.node.remove", "animation.operation.add", "animation.operation.update", "animation.operation.remove", "animation.operations.reorder"]);
+const kinds = new Set(["clip.slip", "clip.roll", "clip.slide", "gap.remove", "audio.gain.range", "audio.parameter.range", "audio.duck", "animation.node.add", "animation.node.update", "animation.node.remove", "animation.operation.add", "animation.operation.update", "animation.operation.remove", "animation.operations.reorder"]);
 export function isAdvancedCommand(command: ProjectCommand): command is AdvancedProjectCommand { return kinds.has(command.type); }
 function fail(message: string): never { throw new StudioException("INVALID_EDIT", message, "input"); }
 function integer(value: number): number { if (!Number.isSafeInteger(value)) fail("Edit times must be safe integer ticks."); return value; }
@@ -75,6 +77,8 @@ export function expandAdvancedCommand(project: StudioProject, command: AdvancedP
   }
   const sequence = project.sequences.find(item => item.id === command.sequenceId);
   if (!sequence) fail("Sequence not found.");
+  if (command.type === "audio.duck") return duckAudio(project,sequence,command);
+  if (command.type === "audio.parameter.range") return audioParameterRange(project,sequence,command);
   if (command.type === "audio.gain.range") {
     const start = integer(command.startTick), end = integer(command.endTick);
     const sample = ticksPerSample(project.settings.sampleRate);

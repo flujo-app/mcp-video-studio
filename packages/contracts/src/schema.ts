@@ -86,7 +86,9 @@ const captionSchema = z.object({
   })
 });
 
+export const AudioMasterSchema=z.object({gainDb:z.number().finite().min(-120).max(24),pan:z.number().finite().min(-1).max(1),effects:z.array(effectSchema).max(64)});
 const sequenceSchema = z.object({
+  audioMaster:AudioMasterSchema.optional(),
   id,
   name: z.string().min(1).max(200),
   tracks: z.array(trackSchema),

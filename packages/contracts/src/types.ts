@@ -191,6 +191,7 @@ export interface Sequence {
   markers: Marker[];
   captions: CaptionCue[];
   qcAllowances?:QcAllowance[];
+  audioMaster?:{gainDb:number;pan:number;effects:EffectInstance[]};
 }
 
 export type AnimationNodeType = "group" | "text" | "rect" | "ellipse" | "line" | "path" | "image" | "video" | "camera" | "particles";
@@ -382,6 +383,8 @@ export interface JobRecord {
 }
 
 export type AdvancedProjectCommand =
+  | import("./audio-parameters.js").AudioParameterRangeCommand
+  | import("./audio-parameters.js").AudioDuckingCommand
   | { type: "clip.slip"; sequenceId: UUID; clipId: UUID; deltaTick: number }
   | { type: "clip.roll"; sequenceId: UUID; clipId: UUID; tick: number }
   | { type: "clip.slide"; sequenceId: UUID; clipId: UUID; deltaTick: number }
@@ -396,6 +399,7 @@ export type AdvancedProjectCommand =
   | { type: "animation.operations.reorder"; animationId: UUID; operationIds: UUID[] };
 
 export type ProjectCommand =
+  | {type:"audio.master.set";sequenceId:string;master:NonNullable<Sequence["audioMaster"]>}
   | AdvancedProjectCommand
   | { type: "track.add"; sequenceId: UUID; track: Omit<Track, "sequenceId"> }
   | { type: "track.update"; sequenceId: UUID; trackId: UUID; patch: Partial<Pick<Track, "name" | "order" | "locked" | "muted" | "solo" | "hidden" | "gainDb" | "pan" | "effects">> }

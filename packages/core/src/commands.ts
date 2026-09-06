@@ -105,6 +105,7 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       if (!next.name) throw new StudioException("INVALID_NAME", "Project name cannot be empty.", "input");
       continue;
     }
+    if(command.type==="audio.master.set"){const sequence=sequenceById(next,command.sequenceId);if(next.settings.channels!==2&&command.master.pan!==0)throw new StudioException("INVALID_AUDIO_PAN","Master pan requires a stereo project.","input");sequence.audioMaster=structuredClone(command.master);addUnique(changed.sequences,sequence.id);continue;}
     if(command.type==="sequence.add"){
       if(next.sequences.some(sequence=>sequence.id===command.sequence.id))throw new StudioException("DUPLICATE_ID","Sequence ID already exists.","input");
       next.sequences.push(structuredClone(command.sequence));addUnique(changed.sequences,command.sequence.id);for(const track of command.sequence.tracks)addUnique(changed.tracks,track.id);continue;

@@ -43,12 +43,13 @@ export async function checkFaststart(filePath: string): Promise<{ faststart: boo
   return { faststart: moov >= 0 && (mdat < 0 || moov < mdat), boxes };
 }
 
-async function loudness(filePath: string, config: StudioConfig, signal?: AbortSignal): Promise<Record<string, number>> {
+async function loudness(filePath: string, config: StudioConfig, signal?: AbortSignal): Promise<Record<string, number|null>> {
   const result = await runChecked(config.ffmpegPath, ["-hide_banner","-protocol_whitelist","file,pipe,data", "-i", path.resolve(filePath), "-af", "loudnorm=I=-16:TP=-1.5:LRA=7:print_format=json", "-f", "null", "-"], { signal, timeoutMs: 60 * 60_000, maxOutputChars: 200_000 });
   const match = /\{[\s\S]*?"input_i"[\s\S]*?\}/g.exec(result.stderr);
   if (!match) return {};
   const parsed = JSON.parse(match[0]) as Record<string, string>;
-  return { integratedLufs: Number(parsed.input_i), truePeakDbtp: Number(parsed.input_tp), lra: Number(parsed.input_lra) };
+  const finite=(value:string|undefined)=>{const number=Number(value);return value!==undefined&&Number.isFinite(number)?number:null;};
+  return { integratedLufs: finite(parsed.input_i), truePeakDbtp: finite(parsed.input_tp), lra: finite(parsed.input_lra) };
 }
 
 export interface DetectorRange{checkId:"video.black"|"video.freeze"|"audio.silence";start:number;end:number}

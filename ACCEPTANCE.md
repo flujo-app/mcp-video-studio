@@ -137,36 +137,35 @@ Remaining: Add end-to-end all-storage/log/browser/tool canary assertions across 
 
 ## Issue 2: Human and MCP clients can make exact time-ranged audio changes without replacing unaffected clips.
 
-Status: in-progress.
+Status: verified locally; exact-head platform CI pending.
 
-- Gain-range commands/UI and real sample-boundary rendering test preserve surrounding samples.
+- Gain/pan/numeric effect ranges are available in the editor and MCP. Actual FFmpeg tests preserve every outside final PCM sample, including downstream stateful processors. See AUDIO_ACCEPTANCE.md and tests/audio-parameter-range*.ts.
 
-Remaining: Extend range controls to pan/effect parameters and complete browser plus actual MCP exact-range acceptance.
+Remaining: Confirm these gates on the six-platform Node 22/24 CI matrix.
 
 ## Issue 2: Preview and exported audio meet documented per-effect parity tolerances.
 
-Status: in-progress.
+Status: verified locally; exact-head platform CI pending.
 
-- Same processing graph for program preview/export; actual FFmpeg supported audio processors execute; post-mix limiter verified by PCM.
+- All ten supported processors pass the documented decoded preview/final AAC PCM matrix (1/8388608 maximum difference), with 44.1-to-48 kHz conversion, exact ranges and nonzero delay/reverb tails. See tests/audio-parity-matrix.integration.test.ts.
 
-Remaining: Document per-effect tolerance table and compare preview/final decoded audio including resampling and tails.
+Remaining: Confirm these gates on the six-platform Node 22/24 CI matrix.
 
 ## Issue 2: Automation is sample/grid aligned, survives regeneration/source swaps, and is covered by boundary tests.
 
-Status: in-progress.
+Status: verified locally; exact-head platform CI pending.
 
-- Exact gain sample boundaries; moved/split linked clip automation and durable undo tests.
-- tests/envelope.test.ts: every outside sample and linear edge survives gain-range update, cross-target write rejected, undo restored
+- Hold/linear gain and hold pan/effect ranges retain sample-aligned points and durable undo. Actual modern/legacy MCP tests preserve all three lane types through partial regeneration, three reviewed versions, a real imported spoken source swap and final render. Unsupported audio curves fail explicitly.
 
-Remaining: Regeneration/source-swap audio automation acceptance and remaining curve/parameter support.
+Remaining: Confirm these gates on the six-platform Node 22/24 CI matrix.
 
 ## Issue 2: A VO + music project can be ducked, mixed, loudness-normalized, reviewed, and exported without an external DAW.
 
-Status: in-progress.
+Status: verified locally; exact-head platform CI pending.
 
-- Music gain range, post-mix track effects, loudness normalization with duplicate-stage rejection, mixer/clip effect stack UI implemented.
+- Actual stdio MCP and Chromium produce spoken narration plus music, apply dialogue processing and range edits, duck/mix/normalize with track and final buses, meter decoded preview playback, review loudness/true peak, and export MP4 plus WAV. Measured production: -16.03 LUFS, -5.29 dBTP, 360 frames at 1920x1080. The intentional static slate remains a video-freeze review warning.
 
-Remaining: Full VO+music browser production, live mixer meters, ducking controls/buses and reviewed export evidence.
+Remaining: Confirm these gates on the six-platform Node 22/24 CI matrix.
 
 ## Issue 1: A human can assemble and revise a multi-track one-minute edit without direct JSON editing or terminal assistance.
 

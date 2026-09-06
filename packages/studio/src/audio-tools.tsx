@@ -1,17 +1,8 @@
 import React,{useState} from "react";
-import {secondsToTicks,ticksToSeconds,type Clip,type EffectInstance,type ProjectCommand,type Sequence} from "@mcp-video-studio/contracts";
+import {AudioRangeControls,DuckingControls} from "./audio-range-controls.js";
+import {AUDIO_FIELDS, type StudioProject,secondsToTicks,ticksToSeconds,type Clip,type EffectInstance,type ProjectCommand,type Sequence} from "@mcp-video-studio/contracts";
 type Field={key:string;value:number;min:number;max:number;step?:number};
-const audio:Record<string,Field[]>={
- highpass:[{key:"frequency",value:80,min:20,max:20000}],lowpass:[{key:"frequency",value:16000,min:20,max:20000}],
- compressor:[{key:"threshold",value:.125,min:.001,max:1,step:.01},{key:"ratio",value:4,min:1,max:20},{key:"attack",value:20,min:.01,max:2000},{key:"release",value:250,min:.01,max:9000}],
- limiter:[{key:"limit",value:.891,min:.0625,max:1,step:.01}],
- delay:[{key:"delayMs",value:250,min:1,max:2000},{key:"decay",value:.3,min:0,max:.9,step:.05}],
- gate:[{key:"threshold",value:.03,min:0,max:1,step:.01},{key:"ratio",value:4,min:1,max:9000},{key:"attack",value:20,min:.01,max:9000},{key:"release",value:250,min:.01,max:9000}],
- deesser:[{key:"intensity",value:.5,min:0,max:1,step:.05},{key:"amount",value:.5,min:0,max:1,step:.05},{key:"frequency",value:.5,min:0,max:1,step:.05}],
- reverb:[{key:"mix",value:.5,min:0,max:1,step:.05}],
- loudness:[{key:"targetLufs",value:-16,min:-70,max:-5},{key:"truePeakDb",value:-1,min:-9,max:0,step:.1},{key:"rangeLu",value:7,min:1,max:50}],
- equalizer:[]
-};
+const audio=AUDIO_FIELDS;
 const video:Record<string,Field[]>={
  color:[{key:"brightness",value:0,min:-1,max:1,step:.05},{key:"contrast",value:1,min:0,max:10,step:.1},{key:"saturation",value:1,min:0,max:3,step:.1}],
  blur:[{key:"radius",value:4,min:0,max:100}],brightness:[{key:"value",value:0,min:-1,max:1,step:.05}],
@@ -40,21 +31,28 @@ export function EffectStack({effects,kind,label,onChange}:{effects:EffectInstanc
   </fieldset>)}
  </fieldset>;
 }
-export function ClipAudioTools({clip,sequence,onMutate}:{clip:Clip;sequence:Sequence;onMutate(commands:ProjectCommand[]):Promise<void>}){
+export function ClipAudioTools({project,clip,sequence,onMutate}:{project:StudioProject;clip:Clip;sequence:Sequence;onMutate(commands:ProjectCommand[]):Promise<void>}){
  const patch=(audio:Clip["audio"])=>void onMutate([{type:"clip.update",sequenceId:sequence.id,clipId:clip.id,patch:{audio}}]);
  return <><fieldset><legend>Pan and fades</legend><label>Clip pan<input type="number" min="-1" max="1" step=".05" defaultValue={clip.audio.pan} key={clip.id+"pan"+clip.audio.pan} onBlur={event=>{if(event.currentTarget.checkValidity())patch({...clip.audio,pan:event.currentTarget.valueAsNumber});}}/></label>
  {(["fadeInTick","fadeOutTick"] as const).map(key=><label key={key}>{key==="fadeInTick"?"Fade in":"Fade out"} seconds<input type="number" min="0" max={ticksToSeconds(clip.durationTick)} step=".01" defaultValue={ticksToSeconds(clip.audio[key])} onBlur={event=>{if(event.currentTarget.checkValidity())patch({...clip.audio,[key]:secondsToTicks(event.currentTarget.valueAsNumber)});}}/></label>)}
  <button onClick={()=>patch({...clip.audio,effects:[makeEffect("highpass"),makeEffect("compressor"),makeEffect("deesser"),makeEffect("limiter")]})}>Apply dialogue chain</button></fieldset>
+ <AudioRangeControls project={project} sequence={sequence} targetType="clip" targetId={clip.id} onMutate={onMutate}/>
  <EffectStack effects={clip.audio.effects} kind="audio" label="Clip audio" onChange={effects=>patch({...clip.audio,effects})}/>
  <EffectStack effects={clip.effects} kind="video" label="Clip video" onChange={effects=>void onMutate([{type:"clip.update",sequenceId:sequence.id,clipId:clip.id,patch:{effects}}])}/>
  </>;
 }
-export function AudioMixer({sequence,onMutate}:{sequence:Sequence|undefined;onMutate(commands:ProjectCommand[]):Promise<void>}){
- if(!sequence)return null;
+export function AudioMixer({project,sequence,onMutate}:{project:StudioProject|undefined;sequence:Sequence|undefined;onMutate(commands:ProjectCommand[]):Promise<void>}){
+ if(!sequence||!project)return null;
  return <details className="audio-mixer"><summary>Audio mixer and track processing</summary><p>Track effects run after the clips are mixed. Build the program preview to audition the same processing used by export.</p><div>
  {sequence.tracks.filter(track=>track.type==="audio"||track.type==="video").map(track=><fieldset key={track.id}><legend>{track.name}</legend>
  <label>Track gain {track.name}<input type="number" min="-120" max="24" step=".5" defaultValue={track.gainDb} key={track.gainDb} onBlur={event=>{if(event.currentTarget.checkValidity())void onMutate([{type:"track.update",sequenceId:sequence.id,trackId:track.id,patch:{gainDb:event.currentTarget.valueAsNumber}}]);}}/></label>
  <label>Track pan {track.name}<input type="number" min="-1" max="1" step=".05" defaultValue={track.pan} key={track.pan} onBlur={event=>{if(event.currentTarget.checkValidity())void onMutate([{type:"track.update",sequenceId:sequence.id,trackId:track.id,patch:{pan:event.currentTarget.valueAsNumber}}]);}}/></label>
  <EffectStack effects={track.effects??[]} kind="audio" label={track.name} onChange={effects=>void onMutate([{type:"track.update",sequenceId:sequence.id,trackId:track.id,patch:{effects}}])}/>
- </fieldset>)}</div></details>;
+ <AudioRangeControls project={project} sequence={sequence} targetType="track" targetId={track.id} onMutate={onMutate}/>
+ </fieldset>)}</div><DuckingControls project={project} sequence={sequence} onMutate={onMutate}/>
+ <fieldset><legend>Final mix bus</legend><p>Process the combined mix once. Per-track buses retain their own effects.</p>
+ <label>Master gain dB<input type="number" min="-120" max="24" step=".5" defaultValue={sequence.audioMaster?.gainDb??0} key={sequence.audioMaster?.gainDb} onBlur={e=>{if(e.currentTarget.checkValidity())void onMutate([{type:"audio.master.set",sequenceId:sequence.id,master:{gainDb:e.currentTarget.valueAsNumber,pan:sequence.audioMaster?.pan??0,effects:sequence.audioMaster?.effects??[]}}]);}}/></label>
+ <button onClick={()=>void onMutate([{type:"audio.master.set",sequenceId:sequence.id,master:{gainDb:sequence.audioMaster?.gainDb??0,pan:sequence.audioMaster?.pan??0,effects:[...(sequence.audioMaster?.effects??[]).filter(effect=>effect.type!=="loudness"),{...makeEffect("loudness"),parameters:{targetLufs:-16,truePeakDb:-1.5,rangeLu:7}}]}}])}>Normalize final mix to -16 LUFS</button>
+ <EffectStack effects={sequence.audioMaster?.effects??[]} kind="audio" label="Final mix" onChange={effects=>void onMutate([{type:"audio.master.set",sequenceId:sequence.id,master:{gainDb:sequence.audioMaster?.gainDb??0,pan:sequence.audioMaster?.pan??0,effects}}])}/>
+ </fieldset></details>;
 }

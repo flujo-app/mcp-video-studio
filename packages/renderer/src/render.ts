@@ -6,6 +6,7 @@ import { framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSec
 import { sequenceDependencies, prepareTransitionTimeline, transitionStyle, ProjectStore, sequenceDuration, sha256File, readJson, writeJson, confinedPath, StudioException } from "@mcp-video-studio/core";
 import { renderAnimation,ANIMATION_RENDERER_VERSION } from "@mcp-video-studio/animation";
 import { requireFfmpegFilters, filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
+import { audioParameterVariants, maskedVariantGraph } from "./audio-ranges.js";
 import { audioAutomationFilters } from "./automation.js";
 import { atempoChain, audioEffectFilters, clipTransformFilters, videoEffectFilters } from "./filters.js";
 
@@ -284,7 +285,17 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
   });
 
   }
+  const variants=pass.audio!==false?audioParameterVariants(project,sequence,durationSamples):undefined;
   if(pass.audio!==false){
+  if(variants){
+    const labels=variants.map((variant,index)=>{
+      const variantInputs=inputs.map(input=>({...input,clip:variant.sequence.clips.find(clip=>clip.id===input.clip.id)??input.clip}));
+      const built=buildFilterGraph(project,variant.sequence,variantInputs,new Map(),undefined,undefined,{video:false});
+      const masked=maskedVariantGraph(built.graph,index,variant.windows);statements.push(masked.graph);
+      return "["+masked.label+"]";
+    });
+    statements.push(labels.join("")+"amix=inputs="+labels.length+":duration=shortest:normalize=0,atrim=end_sample="+durationSamples+",asetpts=N/SR/TB[aout]");
+  }else{
   const audibleTracks = sequence.tracks.filter((track) => track.type === "audio" || track.type === "video");
   const anySolo = audibleTracks.some((track) => track.solo);
   const audioInputs = inputs.filter((input) => input.streams!=="video"&&input.media?.probe.hasAudio && (() => {
@@ -340,6 +351,15 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
   if (audioLabels.length > 0) statements.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest:normalize=0,atrim=end_sample=${durationSamples},apad=whole_len=${durationSamples},asetpts=N/SR/TB[${audioLabel}]`);
   else statements.push(`anullsrc=r=${project.settings.sampleRate}:cl=${project.settings.channels === 1 ? "mono" : project.settings.channels === 6 ? "5.1" : "stereo"},atrim=duration=${durationSeconds}[${audioLabel}]`);
   }
+  }
+  if(pass.audio!==false&&sequence.audioMaster&&!variants){
+    const master=sequence.audioMaster;
+    const normalization=master.effects.some(effect=>effect.enabled&&effect.type==="loudness");
+    if(normalization&&(sequence.clips.some(clip=>clip.audio.effects.some(effect=>effect.enabled&&effect.type==="loudness"))||sequence.tracks.some(track=>track.effects?.some(effect=>effect.enabled&&effect.type==="loudness"))))throw new StudioException("DUPLICATE_NORMALIZATION","Use loudness normalization on the final mix or its inputs, not both.","input");
+    // Rename the final bus input only; each full-history variant already owns this master stage.
+    const last=statements.length-1;statements[last]=statements[last]!.replace(/\[aout\]$/,"[premaster]");
+    statements.push("[premaster]volume="+master.gainDb+"dB,"+(project.settings.channels===2?"stereotools=balance_out="+master.pan+",":"")+[...audioEffectFilters(master.effects,project.settings.sampleRate),"atrim=end_sample="+durationSamples,"apad=whole_len="+durationSamples,"asetpts=N/SR/TB"].join(",")+"[aout]");
+  }
   if(pass.video!==false){
   const outputWidth = maxWidth && width > maxWidth ? Math.max(2, Math.floor(maxWidth / 2) * 2) : width;
   const outputHeight = outputWidth !== width ? Math.max(2, Math.round(height * outputWidth / width / 2) * 2) : height;
@@ -364,8 +384,9 @@ async function continuousAudio(project:StudioProject,sequence:Sequence,store:Pro
  const key=canonicalHash({durationTick,settings:{sampleRate:project.settings.sampleRate,channels:project.settings.channels},
   clips:clips.map(({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})=>({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})),
   tracks:sequence.tracks.map(({id,type,muted,solo,gainDb,pan,effects})=>({id,type,muted,solo,gainDb,pan,effects})),
+  audioMaster:sequence.audioMaster,nested:nestedFingerprint(project,clips,mediaHashes),
   automation:sequence.automation,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
-  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:14,animationRenderer:ANIMATION_RENDERER_VERSION});
+  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:15,animationRenderer:ANIMATION_RENDERER_VERSION});
  const cached=confinedPath(store.root,path.join(store.root,"cache","renders","audio-"+key+".wav"));
  let hit=false;try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
  if(!hit){

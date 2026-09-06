@@ -1,4 +1,5 @@
 export * from "./time.js";
+export * from "./audio-parameters.js";
 export * from "./types.js";
 export * from "./schema.js";
 export * from "./defaults.js";
