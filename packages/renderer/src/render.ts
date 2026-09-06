@@ -206,6 +206,7 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
   if (durationTick <= 0) throw new StudioException("EMPTY_SEQUENCE", "The sequence has no renderable duration.", "input");
   const frameCount = ticksToFrames(durationTick, project.settings.fps, "ceil");
   const durationSeconds = ticksToSeconds(framesToTicks(frameCount, project.settings.fps));
+  const durationSamples=Math.round(durationSeconds*project.settings.sampleRate);
   const fps = `${project.settings.fps.numerator}/${project.settings.fps.denominator}`;
   const { width, height } = project.settings.raster;
   const statements:string[]=[];
@@ -284,11 +285,14 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
     const track = sequence.tracks.find((candidate) => candidate.id === clip.trackId)!;
     if((track.effects??[]).some(effect=>effect.enabled&&effect.type==="loudness")&&clip.audio.effects.some(effect=>effect.enabled&&effect.type==="loudness"))throw new StudioException("DUPLICATE_NORMALIZATION","Use loudness normalization on the clip or its track, not both.","input");
     const rate = clip.playbackRate.numerator / clip.playbackRate.denominator;
+    const sourceRate=input.media?.probe.sampleRate??project.settings.sampleRate,sourceSample=ticksPerSample(sourceRate);
+    const firstSample=Math.round(clip.sourceInTick/sourceSample),lastSample=firstSample+Math.round(clip.durationTick*rate/sourceSample);
     const filters = [
-      `atrim=start=${ticksToSeconds(clip.sourceInTick)}:duration=${ticksToSeconds(Math.round(clip.durationTick * rate))}`,
-      "asetpts=PTS-STARTPTS",
+      "atrim=start_sample="+firstSample+":end_sample="+lastSample,
+      "asetpts=N/SR/TB",
       `aformat=sample_rates=${project.settings.sampleRate}:channel_layouts=${project.settings.channels === 1 ? "mono" : project.settings.channels === 6 ? "5.1" : "stereo"}`,
       ...atempoChain(rate),
+      "asettb=1/"+project.settings.sampleRate,"asetpts=N/SR/TB",
       `volume=${clip.audio.gainDb}dB`,
       ...(project.settings.channels === 2 ? [`stereotools=balance_out=${Math.max(-1, Math.min(1, clip.audio.pan))}`] : []),
       ...(clip.audio.fadeInTick > 0 ? [`afade=t=in:st=0:d=${ticksToSeconds(clip.audio.fadeInTick)}`] : []),
@@ -297,7 +301,10 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
       ...audioAutomationFilters(project, sequence, clip),
       ...sequence.transitions.filter(transition=>transitionStyle(transition.type)!=="cut"&&transition.toClipId===clip.id).map(transition=>"afade=t=in:st=0:d="+ticksToSeconds(transition.durationTick)),
       ...sequence.transitions.filter(transition=>transitionStyle(transition.type)!=="cut"&&transition.fromClipId===clip.id).map(transition=>"afade=t=out:st="+ticksToSeconds(clip.durationTick-transition.durationTick)+":d="+ticksToSeconds(transition.durationTick)),
-      `adelay=${Math.round(clip.startTick / ticksPerSample(project.settings.sampleRate))}S:all=1`
+      `adelay=${Math.round(clip.startTick / ticksPerSample(project.settings.sampleRate))}S:all=1`,
+      // Every mixer input owns the same finite sample interval; no input EOF changes mix duration.
+      "atrim=end_sample="+durationSamples,"apad=whole_len="+durationSamples,
+      "asetpts=N/SR/TB","asetnsamples=n=1024:p=0"
     ];
     const label = `aclip${audioIndex}`;
     statements.push(`[${input.inputIndex}:a]${filters.join(",")}[${label}]`);
@@ -308,7 +315,7 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
     const track=sequence.tracks.find(item=>item.id===trackId)!;
     const label="atrack"+audioLabels.length;
     const filters=[
-      "amix=inputs="+labels.length+":duration=longest:normalize=0",
+      "amix=inputs="+labels.length+":duration=shortest:normalize=0",
       "volume="+track.gainDb+"dB",
       ...(project.settings.channels===2?["stereotools=balance_out="+track.pan]:[]),
       ...audioEffectFilters(track.effects??[],project.settings.sampleRate)
@@ -317,7 +324,7 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
     audioLabels.push("["+label+"]");
   }
   const audioLabel = "aout";
-  if (audioLabels.length > 0) statements.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest:normalize=0,atrim=duration=${durationSeconds},apad=whole_dur=${durationSeconds}[${audioLabel}]`);
+  if (audioLabels.length > 0) statements.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest:normalize=0,atrim=end_sample=${durationSamples},apad=whole_len=${durationSamples},asetpts=N/SR/TB[${audioLabel}]`);
   else statements.push(`anullsrc=r=${project.settings.sampleRate}:cl=${project.settings.channels === 1 ? "mono" : project.settings.channels === 6 ? "5.1" : "stereo"},atrim=duration=${durationSeconds}[${audioLabel}]`);
   }
   if(pass.video!==false){
@@ -345,7 +352,7 @@ async function continuousAudio(project:StudioProject,sequence:Sequence,store:Pro
   clips:clips.map(({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})=>({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})),
   tracks:sequence.tracks.map(({id,type,muted,solo,gainDb,pan,effects})=>({id,type,muted,solo,gainDb,pan,effects})),
   automation:sequence.automation,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
-  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:10,animationRenderer:ANIMATION_RENDERER_VERSION});
+  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:11,animationRenderer:ANIMATION_RENDERER_VERSION});
  const cached=confinedPath(store.root,path.join(store.root,"cache","renders","audio-"+key+".wav"));
  let hit=false;try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
  if(!hit){
@@ -380,7 +387,7 @@ async function videoRanges(project:StudioProject,sequence:Sequence,store:Project
    settings:{raster:project.settings.raster,fps:project.settings.fps,background:project.settings.background,colorSpace:project.settings.colorSpace},
    media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),
    animations:project.animations.filter(animation=>animationIds.has(animation.id)),
-   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:10,animationRenderer:ANIMATION_RENDERER_VERSION
+   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:11,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cached=confinedPath(store.root,path.join(store.root,"cache","renders","video-"+key+".mkv"));
   let hit=false;
@@ -429,7 +436,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: mediaHashes.get(asset.id), offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
     output: { videoRangeFrames:options.videoRangeFrames??null, maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
-    renderer: 10,animationRenderer:ANIMATION_RENDERER_VERSION
+    renderer: 11,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cachePath = confinedPath(store.root,path.join(store.root,"cache","renders",renderKey+"."+preset.container));
   const durationTick = sequenceDuration(sequence);

@@ -26,6 +26,7 @@ integration.each([false,true])("video ranges preserve exact frames and continuou
    expect(decoded[0]!.length).toBe(name==="audio"?192000*2*4:120*160*90*3/2);
    expect(decoded[1]!.length).toBe(decoded[0]!.length);
    if(name==="audio"){
+    for(const pcm of decoded){let square=0,count=0;for(let index=168000*8;index<pcm.length;index+=4){square+=pcm.readFloatLE(index)**2;count++;}expect(Math.sqrt(square/count)).toBeGreaterThan(.02);}
     let maximum=0,maximumIndex=0,firstDifference=-1,lastDifference=-1,differences=0;
     for(let index=0;index<decoded[0]!.length;index+=4){
      const difference=Math.abs(decoded[0]!.readFloatLE(index)-decoded[1]!.readFloatLE(index));
