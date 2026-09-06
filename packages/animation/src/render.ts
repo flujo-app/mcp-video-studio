@@ -1,3 +1,4 @@
+import {createAnimationCapture} from "./capture.js";
 import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
@@ -10,9 +11,9 @@ import { animationProblems } from "@mcp-video-studio/contracts";
 import { createAnimationPainter } from "./painter.js";
 import { evaluateAnimation } from "./evaluate.js";
 
-export const ANIMATION_RENDERER_VERSION=7;
+export const ANIMATION_RENDERER_VERSION=8;
 
-const RENDERER_HTML = '<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:transparent}canvas{display:block}</style></head><body><canvas id="canvas"></canvas><script>window.__applyState=('+createAnimationPainter.toString()+')(document.getElementById("canvas"));</script></body></html>';
+const RENDERER_HTML = '<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:transparent}canvas{display:block}</style></head><body><canvas id="canvas"></canvas><script>window.__captureFrame=('+createAnimationCapture.toString()+')(document.getElementById("canvas"),('+createAnimationPainter.toString()+'));</script></body></html>';
 
 export interface AnimationRenderOptions {
   outputPath: string;
@@ -45,6 +46,7 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
     let target: import("patchright").Frame | import("patchright").Page = page;
     if(document.mode === "html") target=await prepareSandbox(browser,page,context,document.html!,document.seed);
     else {await context.route("**/*",route=>route.abort());await page.setContent(RENDERER_HTML,{waitUntil:"load"});await page.evaluate(()=>globalThis.document.fonts.ready.then(()=>undefined));}
+    let canvasContextRecoveries=0;
     for (let frame = 0; frame < frameCount; frame += 1) {
       if (options.signal?.aborted) throw new StudioException("CANCELLED", "Animation render was cancelled.", "runtime");
       const tick = frame * perFrame;
@@ -53,7 +55,8 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
         const state = evaluateAnimation(document, tick);
         // Evaluate and capture one completed frame atomically in the painter's main world.
         // Keep the execution realm consistent and avoid a separate capture boundary.
-        declarativePng=await page.evaluate(async ({nodes,frame}) => { await (window as unknown as {__applyState:(nodes:unknown,frame:unknown)=>Promise<unknown>}).__applyState(nodes,frame);const canvas=globalThis.document.querySelector("canvas");if(!(canvas instanceof HTMLCanvasElement))throw new Error("Animation canvas is missing.");if(canvas.getContext("2d")?.isContextLost())throw new Error("Animation canvas context was lost.");return canvas.toDataURL("image/png"); }, {nodes:state,frame:{...document.canvas,seed:document.seed,time:tick/35_280_000}}, false);
+        const captured=await page.evaluate(async ({nodes,frame}) => await (window as unknown as {__captureFrame:(nodes:unknown,frame:unknown)=>Promise<{png:string;recoveries:number}>}).__captureFrame(nodes,frame), {nodes:state,frame:{...document.canvas,seed:document.seed,time:tick/35_280_000}}, false);
+        declarativePng=captured.png;canvasContextRecoveries+=captured.recoveries;
       } else {
         await target.evaluate(async state => {
           const host=window as unknown as {__studioFrame:(time:number,frame:number)=>void;__studioFailure?:string;renderFrame?:(state:unknown)=>unknown};
@@ -74,7 +77,7 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
     const fpsText = `${options.fps.numerator}/${options.fps.denominator}`;
     await ffmpegArtifact(config, ["-framerate", fpsText, "-start_number", "0", "-i", path.join(frames, "%08d.png"), "-frames:v", String(frameCount), "-c:v", "ffv1", "-level", "3", "-pix_fmt", "gbrap16le"], options.outputPath, { signal: options.signal, timeoutMs: 12 * 60 * 60_000 });
     options.onProgress?.(1);
-    return { outputPath: path.resolve(options.outputPath), frameCount, durationTick: frameCount * perFrame, ...(await sha256File(options.outputPath)) };
+    return { outputPath: path.resolve(options.outputPath), frameCount, canvasContextRecoveries, durationTick: frameCount * perFrame, ...(await sha256File(options.outputPath)) };
   } catch(error) {
     if(options.signal?.aborted) throw new StudioException("CANCELLED","Animation render cancelled.","runtime");
     if(timedOut) throw new StudioException("RENDER_TIMEOUT","Animation exceeded its bounded rendering deadline.","runtime");
