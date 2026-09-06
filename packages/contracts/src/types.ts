@@ -47,6 +47,7 @@ export interface MediaAsset {
   probe: MediaProbe;
   createdAt: string;
   offline?: boolean;
+  retiming?:{version:1;operationId:string;mode:"freeze"|"reverse"|"linear-ramp";sourceMediaId:UUID;sourceSha256:string;sourceStartTick:number;sourceEndTick:number;durationTick:number;clipSourceInTick:number;startRate:number;endRate:number;freezeAtTick?:number};
 }
 
 export interface Track {

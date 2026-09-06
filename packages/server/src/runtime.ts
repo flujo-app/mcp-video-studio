@@ -1,3 +1,4 @@
+import {recoverRetimeJobs} from "./retiming-recovery.js";
 import {parseExportOptions} from "./export-options.js";
 import {DEFAULT_EXPORT_PRESETS} from "@mcp-video-studio/contracts";
 import {exportEncoderCapabilities,type ExportRange,type EncoderChoice} from "@mcp-video-studio/renderer";
@@ -130,7 +131,7 @@ export class StudioRuntime {
   }
 
   async initialize(): Promise<void> {
-    await recoverArchiveJobs(this.config);await recoverExportHistory(this.config);
+    await recoverArchiveJobs(this.config);await recoverExportHistory(this.config);await recoverRetimeJobs(this.config);
     await this.jobs.initialize();
   }
 

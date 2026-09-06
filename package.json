@@ -26,7 +26,8 @@
     "EXPORTS.md",
     "EDITING.md",
     "MASKS.md",
-    "VIDEO_EFFECTS.md"
+    "VIDEO_EFFECTS.md",
+    "RETIMING.md"
   ],
   "workspaces": [
     "packages/*"

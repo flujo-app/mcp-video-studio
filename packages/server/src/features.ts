@@ -1,3 +1,4 @@
+import {queueRetimeClip,retimeClipSchema} from "./retiming.js";
 import {measureCaptionLayout} from "@mcp-video-studio/renderer";
 import {assertSafeGenerationInput,generationSecrets} from "./generation-privacy.js";
 import { createHash, randomUUID } from "node:crypto";
@@ -8,6 +9,7 @@ import type { StudioRuntime } from "./runtime.js";
 
 const revision = { projectPath: z.string().min(1), expectedRevision: z.number().int().nonnegative() };
 export const featureSchemas = {
+  retime_clip:retimeClipSchema,
   inspect_caption_layout:z.object({projectPath:z.string().min(1),sequenceId:z.string().min(1)}),
   create_sequence: z.object({...revision,name:z.string().trim().min(1).max(200),activate:z.boolean().default(true)}),
   insert_nested_sequence: z.object({...revision,sequenceId:z.string(),sourceSequenceId:z.string(),trackId:z.string(),startTick:z.number().int().nonnegative(),mode:z.enum(["insert","overwrite"]).default("insert")}),
@@ -24,6 +26,7 @@ function fail(message: string): never { throw new StudioException("INVALID_EDIT"
 export async function invokeFeature(runtime: StudioRuntime, name: FeatureName, value: unknown): Promise<Record<string, unknown>> {
   const input = featureSchemas[name].parse(value);
   if(["adopt_generated_media","annotate_generated_version"].includes(name))assertSafeGenerationInput(input,generationSecrets(runtime.config));
+  if(name==="retime_clip")return queueRetimeClip(runtime,input);
   const project = await runtime.store(input.projectPath).read();
   if(name==="inspect_caption_layout"){const p=featureSchemas.inspect_caption_layout.parse(input),sequence=project.sequences.find(sequence=>sequence.id===p.sequenceId);if(!sequence)fail("Sequence not found.");return{success:true,projectId:project.projectId,revision:project.revision,sequenceId:sequence.id,...await measureCaptionLayout(runtime.store(p.projectPath),project,sequence,runtime.config)};}
   if(name==="create_sequence"){

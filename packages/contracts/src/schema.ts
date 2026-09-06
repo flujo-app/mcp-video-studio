@@ -204,6 +204,7 @@ export const StudioProjectSchema = z.object({
       sampleRate: safeInteger.positive().optional(),
       channels: safeInteger.positive().optional()
     }),
+    retiming:z.object({version:z.literal(1),operationId:z.string().uuid(),mode:z.enum(["freeze","reverse","linear-ramp"]),sourceMediaId:id,sourceSha256:z.string().regex(/^[a-f0-9]{64}$/),sourceStartTick:safeInteger.nonnegative(),sourceEndTick:safeInteger.nonnegative(),durationTick:positiveTick,clipSourceInTick:safeInteger.nonnegative(),startRate:z.number().finite().min(.25).max(4),endRate:z.number().finite().min(.25).max(4),freezeAtTick:safeInteger.nonnegative().optional()}).optional(),
     createdAt: z.string(),
     offline: z.boolean().optional()
   })),
