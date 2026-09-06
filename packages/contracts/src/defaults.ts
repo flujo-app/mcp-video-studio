@@ -22,8 +22,16 @@ export const DEFAULT_EXPORT_PRESETS: ExportPreset[] = [
   { id: "web-h264-1080p", name: "Web H.264", container: "mp4", videoCodec: "libx264", audioCodec: "aac", crf: 18, audioBitrate: "192k", faststart: true },
   { id: "web-vp9", name: "Web VP9 / Opus", container: "webm", videoCodec: "libvpx-vp9", audioCodec: "libopus", crf: 30, audioBitrate: "128k" },
   { id: "audio-wav", name: "Audio WAV 24-bit", container: "wav", audioCodec: "pcm_s24le" },
+  { id: "web-hevc", name: "HEVC / AAC", container: "mp4", videoCodec: "libx265", audioCodec: "aac", crf: 23, audioBitrate: "192k", faststart: true },
+  { id: "animated-gif", name: "Animated GIF (no audio)", container: "gif", videoCodec: "gif" },
+  { id: "png-sequence", name: "PNG image sequence ZIP (no audio)", container: "zip", videoCodec: "png" },
   { id: "archive-ffv1", name: "Lossless FFV1", container: "mkv", videoCodec: "ffv1", audioCodec: "flac" }
 ];
+
+/** Existing projects can select new built-ins without rewriting their saved custom presets. */
+export function availableExportPresets(project: Pick<StudioProject,"exportPresets">):ExportPreset[]{
+ return [...project.exportPresets,...DEFAULT_EXPORT_PRESETS.filter(preset=>!project.exportPresets.some(saved=>saved.id===preset.id))].map(preset=>({...preset}));
+}
 
 export function createDefaultProject(name: string): StudioProject {
   const now = new Date().toISOString();

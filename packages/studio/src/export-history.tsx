@@ -9,7 +9,8 @@ type ExportItem = {
   presetId: string;
   outputPath: string;
   error?: string;
-  result?: { sha256?: string; bytes?: number };
+  range?:{startTick:number;endTick:number};
+  result?: { sha256?: string; bytes?: number;encoder?:{requested:string;selected:string;fallback:boolean;reason?:string}|null };
   engine?: { node: string; platform: string; ffmpeg: string };
   sourceHashes?: Record<string, string>;
 };
@@ -99,6 +100,8 @@ export function ExportHistory({
           <details>
             <summary>Output and source checksums</summary>
             <p>SHA-256: {chosen.result?.sha256 ?? "No verified output"}</p>
+            {chosen.range&&<p>Range: [{chosen.range.startTick}, {chosen.range.endTick}) ticks</p>}
+            {chosen.result?.encoder&&<p>Encoder used: {chosen.result.encoder.selected}{chosen.result.encoder.fallback?" (software fallback from "+chosen.result.encoder.requested+")":""}</p>}
             <ul>
               {Object.entries(chosen.sourceHashes ?? {}).map(([id, hash]) => (
                 <li key={id}>

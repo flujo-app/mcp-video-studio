@@ -213,8 +213,8 @@ export const StudioProjectSchema = z.object({
   exportPresets: z.array(z.object({
     id,
     name: z.string(),
-    container: z.enum(["mp4", "webm", "mkv", "gif", "wav"]),
-    videoCodec: z.enum(["libx264", "libx265", "libvpx-vp9", "ffv1", "gif"]).optional(),
+    container: z.enum(["mp4", "webm", "mkv", "gif", "wav", "zip"]),
+    videoCodec: z.enum(["libx264", "libx265", "libvpx-vp9", "ffv1", "gif", "png"]).optional(),
     audioCodec: z.enum(["aac", "libopus", "flac", "pcm_s24le"]).optional(),
     crf: safeInteger.optional(),
     videoBitrate: z.string().optional(),

@@ -1,3 +1,6 @@
+import {parseExportOptions} from "./export-options.js";
+import {DEFAULT_EXPORT_PRESETS} from "@mcp-video-studio/contracts";
+import {exportEncoderCapabilities,type ExportRange,type EncoderChoice} from "@mcp-video-studio/renderer";
 import {queueExport,recoverExportHistory} from './provenance.js';
 import {recoverArchiveJobs} from './archive-jobs.js';
 import {assertSafeGenerationInput,assertSafeGenerationOutput,generationSecrets} from "./generation-privacy.js";
@@ -578,7 +581,8 @@ export class StudioRuntime {
     return { success: true, job };
   }
 
-  async render(input: { projectPath:string;sequenceId:string;presetId:string;outputPath:string;expectedRevision?:number }):Promise<Record<string,unknown>>{return queueExport(this,input);}
+  async getExportCapabilities():Promise<Record<string,unknown>>{return {success:true,presets:DEFAULT_EXPORT_PRESETS,encoders:await exportEncoderCapabilities(this.config.ffmpegPath),range:{video:"frame-aligned",wav:"sample-aligned",audioHistory:"complete-program"},gif:{audio:false,timingResolutionSeconds:.01},pngSequence:{audio:false,container:"zip",maxFrames:100000}};}
+  async render(input: { projectPath:string;sequenceId:string;presetId:string;outputPath:string;expectedRevision?:number;range?:ExportRange;encoder?:EncoderChoice }):Promise<Record<string,unknown>>{return queueExport(this,{...input,...parseExportOptions(input)});}
 
   async renderPreview(input: { projectPath: string; sequenceId: string }): Promise<Record<string, unknown>> {
     const store = this.store(input.projectPath);

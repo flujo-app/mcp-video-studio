@@ -229,3 +229,5 @@ The renderer detects current FFmpeg script-file support and retains compatibilit
 with older distributions using the former filter_complex_script option.
 
 Audio editing supports sample-aligned gain, pan and effect ranges, voiceover ducking, track and final mix processing, and decoded preview meters. See [audio workflow and measured preview/export tolerances](AUDIO_ACCEPTANCE.md) for controls, MCP tools, processing limits and reproducible acceptance tests.
+
+Export formats, exact ranges, PNG ZIP manifests and actual encoder selection are documented in [EXPORTS.md](EXPORTS.md).

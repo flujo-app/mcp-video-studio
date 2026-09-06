@@ -1,3 +1,4 @@
+export const VIDEO_EFFECTS_VERSION=2;
 import type { Clip, EffectInstance } from "@mcp-video-studio/contracts";
 import { StudioException } from "@mcp-video-studio/core";
 function bounded(value:unknown,fallback:number,min:number,max:number):number{
@@ -26,7 +27,7 @@ export function videoEffectFilters(effects:EffectInstance[]):string[]{
    case "brightness":result.push("eq=brightness="+bounded(p.value,0,-1,1));break;
    case "blur":result.push("gblur=sigma="+bounded(p.radius,4,0,100));break;
    case "sharpen":result.push("unsharp=5:5:"+bounded(p.amount,1,-2,5));break;
-   case "vignette":result.push("vignette=angle="+bounded(p.angle,Math.PI/5,0,Math.PI/2));break;
+   case "vignette":result.push("vignette=angle="+bounded(p.angle,Math.PI/5,0,Math.PI/2)+":dither=0");break;
    case "chromaKey":result.push("chromakey="+color(p.color??"#00ff00")+":"+bounded(p.similarity,.15,.01,1)+":"+bounded(p.blend,.05,0,1));break;
    case "grayscale":result.push("hue=s=0");break;
    case "hflip":result.push("hflip");break;

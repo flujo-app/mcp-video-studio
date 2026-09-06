@@ -64,12 +64,16 @@ Remaining: Archive cancellation/recovery jobs, media relink/consolidation workfl
 
 ## Issue 5: Effects and transitions have preview/final coverage and never require caller-authored filtergraphs.
 
-Status: in-progress.
+Status: in-progress; original nine-effect matrix verified locally.
 
-- New actual FFmpeg audio processor/limiter tests and multiply/screen alpha-coverage pixel test pass; shared preview/export renderer.
-- tests/transitions.integration.test.ts: real centered crossfade 50/50 and wipe direction, unchanged frame count; finite source handles rejected atomically
+- The shared preview/export renderer passes exact whole/ranged FFV1 pixel comparisons for color, brightness, blur, sharpen, vignette, chroma key, grayscale, horizontal flip and vertical flip. Actual H264 preview/final delivery meets mean absolute RGB error <= 3 and RMS <= 8; see VIDEO_EFFECTS.md.
+- FFmpeg 5.1 and 7.0.2 both pass 31 actual encoded packets/decoded frames at 12, 24 and 30000/1001 fps for whole and seven-frame ranges. Integer frame PTS fixes a fractional range boundary loss; explicit rational encoding fixes newer FFmpeg's default-rate mismatch.
+- Existing centered crossfade/wipe, crop/scale/rotation/blend and fractional-speed source tests pass. The separate audio parity checkpoint is committed.
 
-Remaining: Remaining declared formats/effects and preview/final parity matrix; finishing browser coverage.
+- Real format tests decode HEVC, GIF, PNG ZIP, H264, VP9, FFV1 and WAV ranges; exact stateful WAV slices and numbered PNG/hash manifests pass. Standard ZIP and ZIP64 repeat byte-for-byte with fixed metadata.
+- Modern/legacy MCP plus bundled CLI/Chromium tests preserve ranges, actual encoder choice and unchanged project snapshots across export/replay. Explicit software fallback works; unavailable recorded hardware rejects replay. See EXPORTS.md.
+
+Remaining: checkpoint and finish combined platform verification of these format, range, encoder and video-effect fixes. Managed LUTs, geometric masks and freeze/reverse/speed-remapping operations are active independent implementation scopes. They are not covered by the nine-effect fixture.
 
 ## Issue 4: A human can inspect and edit a generated animation at node/property/keyframe granularity in Studio.
 

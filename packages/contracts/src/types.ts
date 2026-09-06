@@ -312,8 +312,8 @@ export interface GeneratedArtifact {
 export interface ExportPreset {
   id: UUID;
   name: string;
-  container: "mp4" | "webm" | "mkv" | "gif" | "wav";
-  videoCodec?: "libx264" | "libx265" | "libvpx-vp9" | "ffv1" | "gif";
+  container: "mp4" | "webm" | "mkv" | "gif" | "wav" | "zip";
+  videoCodec?: "libx264" | "libx265" | "libvpx-vp9" | "ffv1" | "gif" | "png";
   audioCodec?: "aac" | "libopus" | "flac" | "pcm_s24le";
   crf?: number;
   videoBitrate?: string;

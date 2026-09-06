@@ -1,3 +1,4 @@
+import {exportOptionsSchema,parseExportOptions} from "./export-options.js";
 import {ticksPerSample,copyClipSelection,pasteClipSelection,type Sequence} from "@mcp-video-studio/contracts";
 import {listExportHistory,getExportHistory,queueExport} from './provenance.js';
 import {queueArchive,listArchiveJobs} from './archive-jobs.js';
@@ -354,11 +355,12 @@ export function createMcpServer(runtime: StudioRuntime, gateway: Gateway): McpSe
     annotations: { destructiveHint: true, openWorldHint: false }
   }, async ({ projectPath, expectedRevision }) => invoke(() => runtime.redo(projectPath, expectedRevision)));
 
+  server.registerTool("get_export_capabilities",{description:"List built-in export formats and real one-frame encoder probes. Compiled and currently usable hardware are reported separately.",inputSchema:z.object({}),annotations:{readOnlyHint:true,openWorldHint:false}},async()=>invoke(()=>runtime.getExportCapabilities()));
   server.registerTool("render_sequence", {
-    description: "Queue a deterministic FFmpeg render of a sequence.",
-    inputSchema: z.object({ projectPath: z.string(), sequenceId: z.string(), presetId: z.string(), outputPath: z.string() }),
+    description: "Queue a saved sequence export, optionally using a frame-aligned video range or sample-aligned WAV range. Hardware fallback is explicit; export history records the actual encoder.",
+    inputSchema: z.object({ projectPath: z.string(), sequenceId: z.string(), presetId: z.string(), outputPath: z.string(),expectedRevision:z.number().int().nonnegative().optional(),...exportOptionsSchema.shape }),
     annotations: { destructiveHint: false, openWorldHint: false }
-  }, async (input) => invoke(() => runtime.render(input)));
+  }, async (input) => invoke(() => runtime.render({projectPath:input.projectPath,sequenceId:input.sequenceId,presetId:input.presetId,outputPath:input.outputPath,...(input.expectedRevision!==undefined?{expectedRevision:input.expectedRevision}:{}),...parseExportOptions(input)})));
 
   server.registerTool("run_qc", {
     description: "Queue full-decode QC with raster, duration, faststart, loudness, peak, and checksum checks.",

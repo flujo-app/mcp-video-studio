@@ -31,6 +31,7 @@ const serverOptions = {
     "@modelcontextprotocol/server-legacy",
     "@modelcontextprotocol/ext-apps/*",
     "patchright",
+    "yazl",
     "zod"
   ]
 };

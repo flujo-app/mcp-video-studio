@@ -1,3 +1,4 @@
+import {parseExportOptions} from "./export-options.js";
 import {listExportHistory,getExportHistory,queueExport} from './provenance.js';
 import {queueArchive,listArchiveJobs} from './archive-jobs.js';
 import { createReadStream } from "node:fs";
@@ -77,6 +78,7 @@ export async function startGateway(runtime: StudioRuntime, token: string): Promi
         clients.add(res); req.once("close", () => clients.delete(res)); return;
       }
       if(req.method === "GET" && url.pathname === "/api/archive/operations"){json(res,200,await listArchiveJobs(runtime.config));return;}
+      if(req.method==="GET"&&url.pathname==="/api/export-capabilities"){json(res,200,await runtime.getExportCapabilities());return;}
       if (req.method === "GET" && url.pathname === "/api/projects") { json(res, 200, await runtime.listProjects()); return; }
       if (req.method === "GET" && url.pathname === "/api/project") { json(res, 200, await runtime.getProject(url.searchParams.get("projectPath") ?? "")); return; }
       if (req.method === "GET" && url.pathname === "/api/jobs") { json(res, 200, { success: true, jobs: runtime.jobs.list() }); return; }
@@ -116,7 +118,7 @@ export async function startGateway(runtime: StudioRuntime, token: string): Promi
         if(url.pathname==="/api/exports/history"){json(res,200,await listExportHistory(runtime.config,String(input.projectPath)));return;}
         if(url.pathname==="/api/exports/detail"){json(res,200,await getExportHistory(runtime.config,String(input.exportId)));return;}
         if(url.pathname==="/api/exports/reproduce"){json(res,202,await queueExport(runtime,{projectPath:String(input.projectPath),reproduceId:String(input.exportId),outputPath:String(input.outputPath),sequenceId:'',presetId:''}));return;}
-        if (url.pathname === "/api/render") { json(res, 202, await runtime.render({ projectPath: String(input.projectPath), sequenceId: String(input.sequenceId), presetId: String(input.presetId), outputPath: String(input.outputPath) })); return; }
+        if (url.pathname === "/api/render") { json(res, 202, await runtime.render({ projectPath: String(input.projectPath), sequenceId: String(input.sequenceId), presetId: String(input.presetId), outputPath: String(input.outputPath),...(input.expectedRevision!==undefined?{expectedRevision:Number(input.expectedRevision)}:{}),...parseExportOptions(input) })); return; }
         if (url.pathname === "/api/qc") { json(res, 202, await runtime.qc({ projectPath: String(input.projectPath), sequenceId: String(input.sequenceId), filePath: String(input.filePath) })); return; }
         if (url.pathname === "/api/jobs/cancel") { json(res, 200, { success: true, job: await runtime.jobs.cancel(String(input.jobId)) }); return; }
       }

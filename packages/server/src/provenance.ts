@@ -1,3 +1,6 @@
+import {parseExportOptions} from "./export-options.js";
+import {availableExportPresets} from "@mcp-video-studio/contracts";
+import type {ExportRange,EncoderChoice} from "@mcp-video-studio/renderer";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { randomUUID } from "node:crypto";
@@ -50,6 +53,8 @@ type Receipt = {
   createdAt: string;
   updatedAt: string;
   projectSnapshot: StudioProject;
+  range?: ExportRange;
+  encoder?: EncoderChoice;
   engine?: Engine;
   sourceHashes?: Record<string, string>;
   result?: Record<string, unknown>;
@@ -291,8 +296,11 @@ export async function queueExport(
     outputPath: string;
     expectedRevision?: number;
     reproduceId?: string;
+    range?: ExportRange;
+    encoder?: EncoderChoice;
   },
 ) {
+  const suppliedOptions=parseExportOptions(input);
   const store = runtime.store(input.projectPath),
     prior = input.reproduceId
       ? await read(runtime.config, input.reproduceId)
@@ -323,6 +331,9 @@ export async function queueExport(
     );
   const sequenceId = prior?.sequenceId ?? input.sequenceId,
     presetId = prior?.presetId ?? input.presetId;
+  project.exportPresets=availableExportPresets(project);
+  const previousEncoder=prior?.result?.encoder as {selected?:string}|null|undefined;
+  const exportOptions=prior?parseExportOptions({range:prior.range,encoder:previousEncoder?.selected?{name:previousEncoder.selected,allowSoftwareFallback:false}:prior.encoder}):suppliedOptions;
   if (
     !project.sequences.some((s) => s.id === sequenceId) ||
     !project.exportPresets.some((p) => p.id === presetId)
@@ -347,6 +358,7 @@ export async function queueExport(
       createdAt: now,
       updatedAt: now,
       projectSnapshot: project,
+      ...exportOptions,
       ...(prior ? { reproducedFrom: prior.id } : {}),
     };
   await recordIds(runtime.config);
@@ -390,6 +402,7 @@ export async function queueExport(
               outputPath,
               projectSnapshot: project,
               stagingDirectory: record.scratch,
+              ...exportOptions,
               ...(prior ? { expectedSourceHashes: prior.sourceHashes! } : {}),
               signal,
               onProgress: (value, message) => void progress(value, message),
