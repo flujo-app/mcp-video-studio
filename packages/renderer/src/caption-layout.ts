@@ -1,3 +1,4 @@
+import {drawtextMetricValues} from "./caption-metrics.js";
 import {mkdir,writeFile,rm} from "node:fs/promises";import path from "node:path";import {randomUUID,createHash} from "node:crypto";
 import type {CaptionCue,StudioProject,Sequence} from "@mcp-video-studio/contracts";import {ProjectStore,StudioException} from "@mcp-video-studio/core";import {mediaPath,runChecked,filterScriptOption,requireFfmpegFilters,type StudioConfig} from "@mcp-video-studio/media";import {captionFontFile,escapeFilterPath} from "./render.js";
 export interface CaptionMeasurement {captionId:string;startTick:number;endTick:number;textWidth:number;textHeight:number;bounds:{left:number;top:number;right:number;bottom:number};safeBounds:{left:number;top:number;right:number;bottom:number};overflow:boolean;outsideSafeArea:boolean}
@@ -20,10 +21,9 @@ export async function measureCaptionLayout(store:ProjectStore,project:StudioProj
    signal?.throwIfAborted();const batch=items.slice(base,base+25),filters:string[]=[];
    for(let i=0;i<batch.length;i++){const [,item]=batch[i]!,file=path.join(scratch,String(base+i)+".txt");await writeFile(file,item.caption.text,"utf8");filters.push("drawtext=fontfile='"+escapeFilterPath(item.font)+"':textfile='"+escapeFilterPath(file)+"':reload=0:expansion=none:fontsize="+item.caption.style.fontSize+":fontcolor=black:x='print("+(900000000+i*2)+",24);print(text_w,24);0':y='print("+(900000001+i*2)+",24);print(text_h,24);0'");}
    const graph=path.join(scratch,"measure.txt");await writeFile(graph,"[0:v]"+filters.join(",")+"[measured]","utf8");
-   const result=await runChecked(config.ffmpegPath,["-hide_banner","-loglevel","warning","-f","lavfi","-i","color=c=black:s=16x16:r=1:d=1",await filterScriptOption(config.ffmpegPath),graph,"-map","[measured]","-frames:v","1","-f","null","-"],{...(signal?{signal}:{}),timeoutMs:60000,maxOutputChars:500000});
+   const result=await runChecked(config.ffmpegPath,["-hide_banner","-loglevel","repeat+warning","-f","lavfi","-i","color=c=black:s=16x16:r=1:d=1",await filterScriptOption(config.ffmpegPath),graph,"-map","[measured]","-frames:v","1","-f","null","-"],{...(signal?{signal}:{}),timeoutMs:60000,maxOutputChars:500000});
    if(result.truncated)throw new StudioException("CAPTION_METRICS_LIMIT","Caption measurement output exceeded its bound.","runtime");
-   const numbers=result.stderr.split(/\r?\n/).filter(line=>/^\s*\d+(?:\.\d+)?\s*$/.test(line)).map(Number),values=new Map<number,number>();
-   for(let i=0;i<numbers.length-1;i++)if(numbers[i]!>=900000000&&numbers[i]!<900000000+batch.length*2)values.set(numbers[i]!,numbers[i+1]!);
+   const values=drawtextMetricValues(result.stderr,batch.length);
    for(let i=0;i<batch.length;i++){const width=values.get(900000000+i*2),height=values.get(900000001+i*2);if(width===undefined||height===undefined||width<0||height<0||width>10000000||height>10000000)throw new StudioException("CAPTION_METRICS_MISSING","The installed drawtext engine did not report bounded text dimensions.","dependency");measured.set(batch[i]![0],{width,height});}
   }
   return{measurements:selected.map(caption=>{const size=measured.get(owner.get(caption.id)!)!;return box(caption,size.width,size.height,project.settings.raster);}),complete:selected.length===captions.length};
