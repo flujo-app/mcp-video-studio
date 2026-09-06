@@ -22,12 +22,16 @@ const serverOptions = {
   outfile: path.join(dist, "index.js"),
   platform: "node",
   format: "esm",
-  target: "node20",
+  target: "node22",
   banner: { js: "#!/usr/bin/env node" },
   external: [
-    "@modelcontextprotocol/sdk/*",
+    "@modelcontextprotocol/server",
+    "@modelcontextprotocol/server/*",
+    "@modelcontextprotocol/node",
+    "@modelcontextprotocol/server-legacy",
     "@modelcontextprotocol/ext-apps/*",
     "patchright",
+    "yazl",
     "zod"
   ]
 };
@@ -52,7 +56,7 @@ if (watch) {
   await Promise.all([build(serverOptions), build(studioOptions)]);
   await chmod(path.join(dist, "index.js"), 0o755);
   await writeFile(path.join(dist, "studio/index.html"), [
-    "<!doctype html><html><head><meta charset=\"utf-8\">",
+    "<!doctype html><html lang=en><head><meta charset=\"utf-8\">",
     "<meta name=\"viewport\" content=\"width=device-width,initial-scale=1\">",
     "<title>MCP Video Studio</title><link rel=\"stylesheet\" href=\"/app.css\"></head>",
     "<body><div id=\"root\"></div><script type=\"module\" src=\"/app.js\"></script></body></html>"

@@ -1,9 +1,19 @@
+import {recoverRetimeJobs} from "./retiming-recovery.js";
+import {parseExportOptions} from "./export-options.js";
+import {DEFAULT_EXPORT_PRESETS} from "@mcp-video-studio/contracts";
+import {exportEncoderCapabilities,type ExportRange,type EncoderChoice} from "@mcp-video-studio/renderer";
+import {queueExport,recoverExportHistory} from './provenance.js';
+import {recoverArchiveJobs} from './archive-jobs.js';
+import {assertSafeGenerationInput,assertSafeGenerationOutput,generationSecrets} from "./generation-privacy.js";
+import { withCaptionRegion, fitGeneratedAudio } from "./generation-files.js";
 import { createHash, randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { stat,rm } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "patchright";
 import {
   defaultClip,
+  composeGeneratedRegion,
+  generationRegion,
   defaultTransform,
   defaultTrack,
   framesToTicks,
@@ -22,7 +32,7 @@ import {
   type StudioProject,
   type TrackType
 } from "@mcp-video-studio/contracts";
-import { asStudioError, atomicWrite, discoverProjects, ProjectStore, projectSummary, StudioException, validateProject } from "@mcp-video-studio/core";
+import { asStudioError, atomicWrite, confinedPath, discoverProjects, ProjectStore, projectSummary, StudioException, validateProject } from "@mcp-video-studio/core";
 import {
   createProxy,
   createThumbnail,
@@ -46,8 +56,8 @@ function slug(value: string): string {
   return value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "").slice(0, 60) || "project";
 }
 
-function generationHash(request: GenerationRequest, scope: GeneratedArtifact["scope"]): string {
-  return createHash("sha256").update(JSON.stringify({ request, scope })).digest("hex");
+function generationHash(request: GenerationRequest, scope: GeneratedArtifact["scope"], region?: {offsetTick:number;durationTick:number}): string {
+  return createHash("sha256").update(JSON.stringify({ request, scope, region })).digest("hex");
 }
 
 function generationDelta(artifactId: string, extra: Partial<ProjectDelta> = {}): ProjectDelta {
@@ -121,6 +131,7 @@ export class StudioRuntime {
   }
 
   async initialize(): Promise<void> {
+    await recoverArchiveJobs(this.config);await recoverExportHistory(this.config);await recoverRetimeJobs(this.config);
     await this.jobs.initialize();
   }
 
@@ -229,6 +240,9 @@ export class StudioRuntime {
   async relink(input: { projectPath: string; mediaId: string; filePath: string; expectedRevision: number }): Promise<Record<string, unknown>> {
     const store = this.store(input.projectPath);
     const result = await relinkMedia(store, input.mediaId, input.filePath, input.expectedRevision, this.config);
+    // IDs imported from a project are untrusted path components; clear only an owned proxy directory.
+    if(/^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$/.test(result.media.id)){const proxy=confinedPath(store.root,path.join(store.root,"proxies",result.media.id));const current=await store.read();if(!current.media.some(asset=>{const relative=path.relative(proxy,mediaPath(store,asset));return relative===''||(!relative.startsWith('..')&&!path.isAbsolute(relative));}))await rm(proxy,{recursive:true,force:true});}
+
     return { success: true, ...result, projectPath: store.root, project: await store.read() };
   }
 
@@ -237,6 +251,8 @@ export class StudioRuntime {
     const result = await consolidateMedia(store, input.mediaIds, input.expectedRevision);
     return { success: true, ...result, projectPath: store.root, project: await store.read() };
   }
+
+  async queueConsolidation(input:{projectPath:string;mediaIds?:string[];expectedRevision:number}):Promise<Record<string,unknown>>{const store=this.store(input.projectPath),project=await store.read();if(project.revision!==input.expectedRevision)throw new StudioException("REVISION_CONFLICT","Project changed before consolidation was queued.","conflict");const job=await this.jobs.enqueue("media","Consolidating verified linked media",async({signal,progress,commit})=>{const result=await consolidateMedia(store,input.mediaIds,input.expectedRevision,signal,{progress,commit});return{success:true,...result,projectPath:store.root,project:await store.read()};});return{success:true,job};}
 
   async inspect(projectPath: string, mediaIds?: string[]): Promise<Record<string, unknown>> {
     const store = this.store(projectPath);
@@ -272,13 +288,20 @@ export class StudioRuntime {
     request: GenerationRequest;
     artifactId?: string;
     parentVersionId?: string;
+    region?: { offsetTick:number; durationTick:number };
+    autoActivate?: boolean | undefined;
   }): Promise<Record<string, unknown>> {
+    assertSafeGenerationInput({name:input.name,request:input.request},generationSecrets(this.config));
     const store = this.store(input.projectPath);
     const project = await store.read();
     if (project.revision !== input.expectedRevision) throw new StudioException("REVISION_CONFLICT", "Project revision changed.", "conflict", { expectedRevision: input.expectedRevision, actualRevision: project.revision });
     const sequence = project.sequences.find((item) => item.id === input.sequenceId);
     if (!sequence) throw new StudioException("SEQUENCE_NOT_FOUND", `Sequence not found: ${input.sequenceId}`, "input");
-    if (input.durationTick <= 0) throw new StudioException("INVALID_GENERATION_RANGE", "Generated content requires a positive duration.", "input");
+    const duration=input.region?.durationTick??input.durationTick;
+    if(!Number.isSafeInteger(input.startTick)||input.startTick<0||!Number.isSafeInteger(input.durationTick)||input.durationTick<=0||!Number.isSafeInteger(duration)||duration<=0||duration>secondsToTicks(600))throw new StudioException("INVALID_GENERATION_RANGE","Generate a bounded positive region of at most ten minutes.","input");
+    if(input.region&&(!Number.isSafeInteger(input.region.offsetTick)||input.region.offsetTick<0||input.region.offsetTick+duration>input.durationTick))throw new StudioException("INVALID_GENERATION_RANGE","Regeneration must stay inside the artifact slot.","input");
+    if((input.kind==="animation"||input.kind==="captions")&&[input.startTick,input.durationTick,input.region?.offsetTick??0,duration].some(t=>t%framesToTicks(1,project.settings.fps)!==0))throw new StudioException("INVALID_GENERATION_RANGE","Animation/caption regions must align to the project frame grid.","input");
+
     const track = input.trackId ? sequence.tracks.find((item) => item.id === input.trackId) : undefined;
     if (input.kind === "captions" && track?.type !== "caption") throw new StudioException("INVALID_CAPTION_TRACK", "Caption generation requires a caption track.", "input");
     if ((input.kind === "narration" || input.kind === "music") && track?.type !== "audio" && !input.clipId) throw new StudioException("INVALID_AUDIO_TRACK", "Audio generation requires an audio track or an existing clip.", "input");
@@ -297,9 +320,11 @@ export class StudioRuntime {
     const version: GeneratedArtifactVersion = {
       id: versionId,
       ...(input.parentVersionId ? { parentVersionId: input.parentVersionId } : {}),
+      ...(input.region?{region:structuredClone(input.region)}:{}),
+      autoActivate:input.autoActivate===true,
       status: "queued",
       request: structuredClone(input.request),
-      provenance: { provider: input.request.provider, model: effectiveModel(this.config, input.kind, input.request), requestHash: generationHash(input.request, scope), sourceRevision: project.revision },
+      provenance: { provider: input.request.provider, model: effectiveModel(this.config, input.kind, input.request), requestHash: generationHash(input.request, scope, input.region), sourceRevision: project.revision },
       createdAt: new Date().toISOString()
     };
     if (input.artifactId) {
@@ -318,34 +343,43 @@ export class StudioRuntime {
         await progress(0.08, `Requesting ${input.request.provider}`);
         const current = await store.read();
         const artifact = current.generatedArtifacts.find((item) => item.id === artifactId)!;
+        const region=generationRegion(artifact,input.region);
+        const parent=input.parentVersionId?artifact.versions.find(v=>v.id===input.parentVersionId):undefined;
+        if(input.region&&!parent?.output)throw new StudioException("GENERATION_PARENT_OUTPUT","Region regeneration requires a completed parent version.","input");
+        const activate=async()=>{if(input.autoActivate===true){try{await mutateLatest(store,[{type:"generation.version.activate",artifactId,versionId}]);}catch(error){await mutateLatest(store,[{type:"generation.version.update",artifactId,versionId,patch:{error:{code:"AUTO_ACTIVATE_CONFLICT",message:"Draft saved; automatic activation conflicted with current timeline edits. Review and activate explicitly.",category:"conflict"}}}]);}}};
+
         if (input.kind === "captions") {
           const sourceId = input.request.sourceMediaId;
           if (!sourceId) throw new StudioException("SOURCE_MEDIA_REQUIRED", "Caption generation requires sourceMediaId.", "input");
           const media = current.media.find((item) => item.id === sourceId);
           if (!media) throw new StudioException("MEDIA_NOT_FOUND", `Source media not found: ${sourceId}`, "input");
-          const transcript = await this.generation.transcribe(input.request, mediaPath(store, media), signal);
+          const sourceOffsetTick=Number(input.request.parameters?.sourceOffsetTick??0)+region.offsetTick;
+          if(!Number.isSafeInteger(sourceOffsetTick)||sourceOffsetTick<0||sourceOffsetTick+region.durationTick>(media.probe.durationTick??0))throw new StudioException("CAPTION_SOURCE_RANGE","Caption region exceeds the source audio duration.","input");
+          const transcript = await withCaptionRegion(mediaPath(store,media),sourceOffsetTick,region.durationTick,this.config,signal,file=>this.generation.transcribe(input.request,file,signal));
+          assertSafeGenerationOutput(transcript,generationSecrets(this.config));
           await progress(0.72, "Converting transcript to editable cues");
           const captionTrackId = artifact.scope.trackId;
           if (!captionTrackId) throw new StudioException("INVALID_CAPTION_TRACK", "Generated captions are not bound to a caption track.", "runtime");
-          const captions = transcriptCues(transcript, artifact, captionTrackId, current);
+          const captions = transcriptCues(transcript, {...artifact,scope:{...artifact.scope,startTick:artifact.scope.startTick+region.offsetTick,durationTick:region.durationTick}}, captionTrackId, current);
+
           await replaceLatest(store, (draft) => {
             const target = draft.generatedArtifacts.find((item) => item.id === artifactId)!;
             const targetVersion = target.versions.find((item) => item.id === versionId)!;
             targetVersion.status = "draft";
-            targetVersion.output = { captions };
+            let reviewedCaptions=structuredClone(captions);
+            if(input.region){const savedParent=target.versions.find(v=>v.id===input.parentVersionId);const start=target.scope.startTick+region.offsetTick,end=start+region.durationTick;for(const cue of savedParent?.output?.captions??[]){const finish=cue.startTick+cue.durationTick;if(cue.startTick<start){const duration=Math.min(finish,start)-cue.startTick;if(duration>0)reviewedCaptions.push({...structuredClone(cue),durationTick:duration});}if(finish>end){const at=Math.max(cue.startTick,end);reviewedCaptions.push({...structuredClone(cue),id:cue.startTick<start?randomUUID():cue.id,startTick:at,durationTick:finish-at});}}}
+            targetVersion.output = { captions:reviewedCaptions };
             targetVersion.provenance.model = transcript.model;
             if (transcript.requestId) targetVersion.provenance.requestId = transcript.requestId;
-            if (!target.activeVersionId) {
-              const targetSequence = draft.sequences.find((item) => item.id === target.scope.sequenceId)!;
-              targetSequence.captions.push(...structuredClone(captions));
-              target.activeVersionId = versionId;
-            }
+
           }, generationDelta(artifactId, { sequences: [artifact.scope.sequenceId] }));
+          await activate();
           await progress(1, "Caption draft ready for review");
           return { artifactId, versionId, kind: input.kind, captionCount: captions.length };
         }
         if (input.kind === "animation") {
-          const result = await this.generation.generateAnimation(input.request, { name: input.name, durationTick: artifact.scope.durationTick, canvas: current.settings.raster, fps: current.settings.fps }, signal);
+          const result = await this.generation.generateAnimation(input.request, { name: input.name, durationTick: region.durationTick, canvas: current.settings.raster, fps: current.settings.fps }, signal);
+          assertSafeGenerationOutput(result,generationSecrets(this.config));
           const candidate = structuredClone(current);
           candidate.animations.push(result.animation);
           validateProject(candidate);
@@ -355,30 +389,24 @@ export class StudioRuntime {
             const target = draft.generatedArtifacts.find((item) => item.id === artifactId)!;
             const targetVersion = target.versions.find((item) => item.id === versionId)!;
             targetVersion.status = "draft";
-            targetVersion.output = { animationId: result.animation.id };
+            targetVersion.output = input.region?{segments:composeGeneratedRegion(parent!.output!,{animationId:result.animation.id},region,artifact.scope.durationTick)}:{ animationId: result.animation.id };
             targetVersion.provenance.model = result.model;
             if (result.requestId) targetVersion.provenance.requestId = result.requestId;
-            if (!target.activeVersionId) {
-              const targetSequence = draft.sequences.find((item) => item.id === target.scope.sequenceId)!;
-              let clip = target.scope.clipId ? targetSequence.clips.find((item) => item.id === target.scope.clipId) : undefined;
-              if (!clip) {
-                if (!target.scope.trackId || !target.scope.clipId) throw new StudioException("GENERATION_SCOPE_INVALID", "Animation generation requires a track and clip binding.", "runtime");
-                clip = defaultClip(target.scope.trackId, { type: "animation", animationId: result.animation.id }, target.name, target.scope.durationTick);
-                clip.id = target.scope.clipId; clip.startTick = target.scope.startTick; targetSequence.clips.push(clip);
-              } else clip.source = { type: "animation", animationId: result.animation.id };
-              target.activeVersionId = versionId;
-            }
+
           }, generationDelta(artifactId, { sequences: [artifact.scope.sequenceId], clips: artifact.scope.clipId ? [artifact.scope.clipId] : [], animations: [result.animation.id] }));
+          await activate();
           await progress(1, "Animation draft ready for review");
           return { artifactId, versionId, kind: input.kind, animationId: result.animation.id };
         }
 
         const binary = input.kind === "music"
-          ? await this.generation.composeMusic(input.request, artifact.scope.durationTick, signal)
+          ? await this.generation.composeMusic(input.request, region.durationTick, signal)
           : await this.generation.synthesizeSpeech(input.request, signal);
-        await progress(0.65, "Importing generated audio");
+        assertSafeGenerationOutput({model:binary.model,mimeType:binary.mimeType,requestId:binary.requestId},generationSecrets(this.config));
+        await progress(0.65, "Fitting generated audio to the requested slot");
+        binary.data=await fitGeneratedAudio(binary.data,binary.extension,region.durationTick,this.config,signal,binary.rawAudio);binary.extension="wav";binary.mimeType="audio/wav";
         const sha256 = createHash("sha256").update(binary.data).digest("hex");
-        const relativePath = path.join("assets", sha256.slice(0, 2), sha256.slice(2, 4), `${sha256}.${binary.extension}`);
+        const relativePath = path.posix.join("assets", sha256.slice(0, 2), sha256.slice(2, 4), `${sha256}.${binary.extension}`);
         const filePath = path.join(store.root, relativePath);
         await atomicWrite(filePath, binary.data);
         const probe = await probeMedia(filePath, this.config, signal);
@@ -390,20 +418,12 @@ export class StudioRuntime {
           const target = draft.generatedArtifacts.find((item) => item.id === artifactId)!;
           const targetVersion = target.versions.find((item) => item.id === versionId)!;
           targetVersion.status = "draft";
-          targetVersion.output = { mediaId: media.id };
+          targetVersion.output = input.region?{segments:composeGeneratedRegion(parent!.output!,{mediaId:media.id},region,artifact.scope.durationTick)}:{ mediaId: media.id };
           targetVersion.provenance.model = binary.model;
           if (binary.requestId) targetVersion.provenance.requestId = binary.requestId;
-          if (!target.activeVersionId) {
-            const targetSequence = draft.sequences.find((item) => item.id === target.scope.sequenceId)!;
-            let clip = target.scope.clipId ? targetSequence.clips.find((item) => item.id === target.scope.clipId) : undefined;
-            if (!clip) {
-              if (!target.scope.trackId || !target.scope.clipId) throw new StudioException("GENERATION_SCOPE_INVALID", "Audio generation requires a track and clip binding.", "runtime");
-              clip = defaultClip(target.scope.trackId, { type: "media", mediaId: media.id }, target.name, target.scope.durationTick);
-              clip.id = target.scope.clipId; clip.startTick = target.scope.startTick; targetSequence.clips.push(clip);
-            } else clip.source = { type: "media", mediaId: media.id };
-            target.activeVersionId = versionId;
-          }
+
         }, generationDelta(artifactId, { sequences: [artifact.scope.sequenceId], clips: artifact.scope.clipId ? [artifact.scope.clipId] : [], media: existing ? [] : [media.id] }));
+        await activate();
         const waveform = await this.jobs.enqueue("waveform", `Creating waveform for ${media.name}`, ({ signal: waveformSignal }) => createWaveform(store, media, this.config, waveformSignal));
         await progress(1, `${input.kind === "music" ? "Music" : "Narration"} draft ready for review`);
         return { artifactId, versionId, kind: input.kind, mediaId: media.id, waveformJobId: waveform.id };
@@ -415,33 +435,34 @@ export class StudioRuntime {
     return { success: true, projectPath: store.root, artifactId, versionId, job, project: await store.read() };
   }
 
-  async generateNarration(input: { projectPath: string; expectedRevision: number; sequenceId: string; trackId: string; clipId?: string; startTick: number; durationTick: number; name: string; text: string; provider: "openai" | "elevenlabs"; model?: string; voiceId?: string; language?: string; seed?: number; parameters?: Record<string, unknown> }): Promise<Record<string, unknown>> {
+  async generateNarration(input: { projectPath: string; expectedRevision: number; autoActivate?: boolean | undefined; sequenceId: string; trackId: string; clipId?: string; startTick: number; durationTick: number; name: string; text: string; provider: "openai" | "elevenlabs"; model?: string; voiceId?: string; language?: string; seed?: number; parameters?: Record<string, unknown> }): Promise<Record<string, unknown>> {
     return this.queueGeneratedArtifact({ ...input, kind: "narration", request: { provider: input.provider, text: input.text, ...(input.model ? { model: input.model } : {}), ...(input.voiceId ? { voiceId: input.voiceId } : {}), ...(input.language ? { language: input.language } : {}), ...(input.seed !== undefined ? { seed: input.seed } : {}), ...(input.parameters ? { parameters: input.parameters } : {}) } });
   }
 
-  async generateMusic(input: { projectPath: string; expectedRevision: number; sequenceId: string; trackId: string; clipId?: string; startTick: number; durationTick: number; name: string; prompt: string; model?: string; seed?: number; parameters?: Record<string, unknown> }): Promise<Record<string, unknown>> {
+  async generateMusic(input: { projectPath: string; expectedRevision: number; autoActivate?: boolean | undefined; sequenceId: string; trackId: string; clipId?: string; startTick: number; durationTick: number; name: string; prompt: string; model?: string; seed?: number; parameters?: Record<string, unknown> }): Promise<Record<string, unknown>> {
     return this.queueGeneratedArtifact({ ...input, kind: "music", request: { provider: "elevenlabs", prompt: input.prompt, ...(input.model ? { model: input.model } : {}), ...(input.seed !== undefined ? { seed: input.seed } : {}), ...(input.parameters ? { parameters: input.parameters } : {}) } });
   }
 
-  async generateCaptions(input: { projectPath: string; expectedRevision: number; sequenceId: string; trackId: string; startTick: number; durationTick: number; name: string; sourceMediaId: string; provider: "openai" | "elevenlabs"; model?: string; language?: string; parameters?: Record<string, unknown> }): Promise<Record<string, unknown>> {
+  async generateCaptions(input: { projectPath: string; expectedRevision: number; autoActivate?: boolean | undefined; sequenceId: string; trackId: string; startTick: number; durationTick: number; name: string; sourceMediaId: string; provider: "openai" | "elevenlabs"; model?: string; language?: string; parameters?: Record<string, unknown> }): Promise<Record<string, unknown>> {
     return this.queueGeneratedArtifact({ ...input, kind: "captions", request: { provider: input.provider, sourceMediaId: input.sourceMediaId, ...(input.model ? { model: input.model } : {}), ...(input.language ? { language: input.language } : {}), ...(input.parameters ? { parameters: input.parameters } : {}) } });
   }
 
-  async generateAnimation(input: { projectPath: string; expectedRevision: number; sequenceId: string; trackId: string; clipId?: string; startTick: number; durationTick: number; name: string; prompt: string; model?: string; seed?: number; parameters?: Record<string, unknown> }): Promise<Record<string, unknown>> {
+  async generateAnimation(input: { projectPath: string; expectedRevision: number; autoActivate?: boolean | undefined; sequenceId: string; trackId: string; clipId?: string; startTick: number; durationTick: number; name: string; prompt: string; model?: string; seed?: number; parameters?: Record<string, unknown> }): Promise<Record<string, unknown>> {
     return this.queueGeneratedArtifact({ ...input, kind: "animation", request: { provider: "language", prompt: input.prompt, ...(input.model ? { model: input.model } : {}), ...(input.seed !== undefined ? { seed: input.seed } : {}), ...(input.parameters ? { parameters: input.parameters } : {}) } });
   }
 
-  async regenerateGeneratedArtifact(input: { projectPath: string; expectedRevision: number; artifactId: string; requestPatch?: Partial<GenerationRequest> }): Promise<Record<string, unknown>> {
+  async regenerateGeneratedArtifact(input: { projectPath: string; expectedRevision: number; artifactId: string; requestPatch?: Partial<GenerationRequest>; region?: {offsetTick:number;durationTick:number}|undefined; autoActivate?:boolean|undefined; parentVersionId?:string|undefined }): Promise<Record<string, unknown>> {
     const project = await this.store(input.projectPath).read();
     const artifact = project.generatedArtifacts.find((item) => item.id === input.artifactId);
     if (!artifact) throw new StudioException("GENERATION_NOT_FOUND", `Generated artifact not found: ${input.artifactId}`, "input");
-    const parent = artifact.versions.find((item) => item.id === artifact.activeVersionId) ?? artifact.versions.at(-1);
+    const parent = input.parentVersionId?artifact.versions.find(v=>v.id===input.parentVersionId):artifact.versions.find((item) => item.id === artifact.activeVersionId) ?? artifact.versions.at(-1);
     if (!parent) throw new StudioException("GENERATION_VERSION_NOT_FOUND", "The generated artifact has no version to regenerate.", "input");
     const request = { ...structuredClone(parent.request), ...structuredClone(input.requestPatch ?? {}) };
-    return this.queueGeneratedArtifact({ projectPath: input.projectPath, expectedRevision: input.expectedRevision, artifactId: artifact.id, parentVersionId: parent.id, kind: artifact.kind, name: artifact.name, sequenceId: artifact.scope.sequenceId, startTick: artifact.scope.startTick, durationTick: artifact.scope.durationTick, ...(artifact.scope.trackId ? { trackId: artifact.scope.trackId } : {}), ...(artifact.scope.clipId ? { clipId: artifact.scope.clipId } : {}), request });
+    return this.queueGeneratedArtifact({ projectPath: input.projectPath, expectedRevision: input.expectedRevision, artifactId: artifact.id, parentVersionId: parent.id, ...(input.region?{region:input.region}:{}), autoActivate:input.autoActivate===true, kind: artifact.kind, name: artifact.name, sequenceId: artifact.scope.sequenceId, startTick: artifact.scope.startTick, durationTick: artifact.scope.durationTick, ...(artifact.scope.trackId ? { trackId: artifact.scope.trackId } : {}), ...(artifact.scope.clipId ? { clipId: artifact.scope.clipId } : {}), request });
   }
 
   async reviewGeneratedVersion(input: { projectPath: string; expectedRevision: number; artifactId: string; versionId: string; action: "activate" | "approve" | "reject"; reviewer: string; note?: string }): Promise<Record<string, unknown>> {
+    assertSafeGenerationInput({reviewer:input.reviewer,note:input.note},generationSecrets(this.config));
     const commands: ProjectCommand[] = [];
     if (input.action === "activate" || input.action === "approve") commands.push({ type: "generation.version.activate", artifactId: input.artifactId, versionId: input.versionId });
     if (input.action === "approve" || input.action === "reject") commands.push({ type: "generation.version.update", artifactId: input.artifactId, versionId: input.versionId, patch: { status: input.action === "approve" ? "approved" : "rejected", review: { reviewer: input.reviewer, reviewedAt: new Date().toISOString(), ...(input.note ? { note: input.note } : {}) } } });
@@ -498,7 +519,7 @@ export class StudioRuntime {
     const commands: ProjectCommand[] = media.map((asset) => {
       const track = asset.kind === "audio" ? audioTrack : videoTrack;
       const rawDuration = asset.kind === "image" ? secondsToTicks(input.imageDurationSeconds ?? 5) : Math.max(asset.probe.durationTick, secondsToTicks(1));
-      const durationTick = track.type === "audio" ? rawDuration : framesToTicks(ticksToFrames(rawDuration, project.settings.fps, "ceil"), project.settings.fps);
+      const durationTick = track.type === "audio" ? rawDuration : framesToTicks(Math.max(1,ticksToFrames(rawDuration, project.settings.fps, "floor")), project.settings.fps);
       const startTick = track.type === "audio" ? audioCursor : visualCursor;
       const clip = defaultClip(track.id, { type: "media", mediaId: asset.id }, asset.name, durationTick);
       clip.startTick = startTick;
@@ -561,17 +582,8 @@ export class StudioRuntime {
     return { success: true, job };
   }
 
-  async render(input: { projectPath: string; sequenceId: string; presetId: string; outputPath: string }): Promise<Record<string, unknown>> {
-    const store = this.store(input.projectPath);
-    const job = await this.jobs.enqueue("render", "Waiting to render", ({ signal, progress }) => renderSequence(store, this.config, {
-      sequenceId: input.sequenceId,
-      presetId: input.presetId,
-      outputPath: path.resolve(input.outputPath),
-      signal,
-      onProgress: (value, message) => void progress(value, message)
-    }));
-    return { success: true, job };
-  }
+  async getExportCapabilities():Promise<Record<string,unknown>>{return {success:true,presets:DEFAULT_EXPORT_PRESETS,encoders:await exportEncoderCapabilities(this.config.ffmpegPath),range:{video:"frame-aligned",wav:"sample-aligned",audioHistory:"complete-program"},gif:{audio:false,timingResolutionSeconds:.01},pngSequence:{audio:false,container:"zip",maxFrames:100000}};}
+  async render(input: { projectPath:string;sequenceId:string;presetId:string;outputPath:string;expectedRevision?:number;range?:ExportRange;encoder?:EncoderChoice }):Promise<Record<string,unknown>>{return queueExport(this,{...input,...parseExportOptions(input)});}
 
   async renderPreview(input: { projectPath: string; sequenceId: string }): Promise<Record<string, unknown>> {
     const store = this.store(input.projectPath);

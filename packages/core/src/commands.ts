@@ -1,7 +1,10 @@
+import { activateGenerated } from "./generation.js";
 import { randomUUID } from "node:crypto";
 import type { Clip, ProjectCommand, ProjectDelta, Sequence, StudioProject, Track } from "@mcp-video-studio/contracts";
-import { rational } from "@mcp-video-studio/contracts";
+import { rational,ticksPerSample } from "@mcp-video-studio/contracts";
+import { rippleTimeline, shiftClipAutomation, splitClipAt, cleanupClipReferences } from "./timeline.js";
 import { StudioException } from "./errors.js";
+import { isAdvancedCommand, expandAdvancedCommand, relatedClipIds } from "./advanced.js";
 
 function sequenceById(project: StudioProject, id: string): Sequence {
   const sequence = project.sequences.find((candidate) => candidate.id === id);
@@ -43,44 +46,27 @@ function addUnique(values: string[], value: string): void {
   if (!values.includes(value)) values.push(value);
 }
 
-function rippleAfter(sequence: Sequence, tick: number, amount: number, excluded: Set<string>, trackIds?: Set<string>): void {
-  if (amount === 0) return;
-  const unlocked = new Set(sequence.tracks.filter((track) => !track.locked && (!trackIds || trackIds.has(track.id))).map((track) => track.id));
-  for (const clip of sequence.clips) {
-    if (!excluded.has(clip.id) && unlocked.has(clip.trackId) && clip.startTick >= tick) clip.startTick += amount;
-  }
-}
 
 function overwriteRange(sequence: Sequence, incoming: Clip): string[] {
-  const removed: string[] = [];
-  const start = incoming.startTick;
-  const finish = end(incoming);
-  const replacements: Clip[] = [];
-  for (const existing of sequence.clips) {
-    if (existing.trackId !== incoming.trackId || existing.id === incoming.id || end(existing) <= start || existing.startTick >= finish) continue;
-    const existingEnd = end(existing);
-    if (existing.startTick < start && existingEnd > finish) {
-      const right: Clip = structuredClone(existing);
-      right.id = randomUUID();
-      right.startTick = finish;
-      right.durationTick = existingEnd - finish;
-      right.sourceInTick += sourceAdvance(existing, finish - existing.startTick);
-      existing.durationTick = start - existing.startTick;
-      replacements.push(right);
-    } else if (existing.startTick < start) {
-      existing.durationTick = start - existing.startTick;
-    } else if (existingEnd > finish) {
-      const advance = finish - existing.startTick;
-      existing.startTick = finish;
-      existing.durationTick = existingEnd - finish;
-      existing.sourceInTick += sourceAdvance(existing, advance);
-    } else {
-      removed.push(existing.id);
+  const start=incoming.startTick,finish=end(incoming);
+  const direct=sequence.clips.filter(clip=>clip.trackId===incoming.trackId&&clip.id!==incoming.id&&end(clip)>start&&clip.startTick<finish);
+  const affected=relatedClipIds(sequence,direct.map(clip=>clip.id)).map(id=>clipById(sequence,id)).filter(clip=>clip.id!==incoming.id&&end(clip)>start&&clip.startTick<finish);
+  const touched=new Set(affected.map(clip=>clip.id)),removed=new Set<string>(),groups=new Map<string,string>(),links=new Map<string,string>();
+  const fresh=(map:Map<string,string>,id:string)=>{let value=map.get(id);if(!value){value=randomUUID();map.set(id,value);}return value;};
+  for(const clip of affected){
+    assertUnlocked(sequence,clip.trackId);
+    let middle=clip;
+    if(start>clip.startTick)middle=splitClipAt(sequence,clip,start);
+    if(finish<end(middle)){
+      const right=splitClipAt(sequence,middle,finish);touched.add(right.id);
+      if(right.groupId)right.groupId=fresh(groups,right.groupId);
+      if(right.linkedGroupId)right.linkedGroupId=fresh(links,right.linkedGroupId);
     }
+    removed.add(middle.id);
   }
-  sequence.clips = sequence.clips.filter((clip) => !removed.includes(clip.id));
-  sequence.clips.push(...replacements);
-  return removed;
+  cleanupClipReferences(sequence,removed);
+  sequence.clips=sequence.clips.filter(clip=>!removed.has(clip.id));
+  return [...new Set([...touched,...removed])];
 }
 
 function sortSequence(sequence: Sequence): void {
@@ -96,10 +82,29 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
   const warnings: string[] = [];
 
   for (const command of commands) {
+    if (isAdvancedCommand(command)) {
+      const applied = applyProjectCommands(next, expandAdvancedCommand(next, command));
+      Object.assign(next, applied.project);
+      for (const key of Object.keys(changed) as Array<keyof ProjectDelta>) for (const id of applied.changed[key]) addUnique(changed[key], id);
+      warnings.push(...applied.warnings);
+      continue;
+    }
     if (command.type === "project.rename") {
       next.name = command.name.trim();
       if (!next.name) throw new StudioException("INVALID_NAME", "Project name cannot be empty.", "input");
       continue;
+    }
+    if(command.type==="audio.master.set"){const sequence=sequenceById(next,command.sequenceId);if(next.settings.channels!==2&&command.master.pan!==0)throw new StudioException("INVALID_AUDIO_PAN","Master pan requires a stereo project.","input");sequence.audioMaster=structuredClone(command.master);addUnique(changed.sequences,sequence.id);continue;}
+    if(command.type==="sequence.add"){
+      if(next.sequences.some(sequence=>sequence.id===command.sequence.id))throw new StudioException("DUPLICATE_ID","Sequence ID already exists.","input");
+      next.sequences.push(structuredClone(command.sequence));addUnique(changed.sequences,command.sequence.id);for(const track of command.sequence.tracks)addUnique(changed.tracks,track.id);continue;
+    }
+    if(command.type==="sequence.activate"){sequenceById(next,command.sequenceId);next.activeSequenceId=command.sequenceId;addUnique(changed.sequences,command.sequenceId);continue;}
+    if(command.type==="sequence.rename"){const sequence=sequenceById(next,command.sequenceId);if(!command.name.trim())throw new StudioException("INVALID_NAME","Sequence name cannot be empty.","input");sequence.name=command.name.trim();addUnique(changed.sequences,sequence.id);continue;}
+    if(command.type==="sequence.remove"){
+      const sequence=sequenceById(next,command.sequenceId);
+      if(next.sequences.length===1||next.sequences.some(owner=>owner.clips.some(clip=>clip.source.type==="sequence"&&clip.source.sequenceId===sequence.id))||next.generatedArtifacts.some(artifact=>artifact.scope.sequenceId===sequence.id))throw new StudioException("SEQUENCE_IN_USE","Keep at least one sequence and remove nested/generated references before deleting a sequence.","input");
+      next.sequences=next.sequences.filter(item=>item.id!==sequence.id);if(next.activeSequenceId===sequence.id)next.activeSequenceId=next.sequences[0]!.id;addUnique(changed.sequences,sequence.id);continue;
     }
     if (command.type === "animation.set") {
       const index = next.animations.findIndex((item) => item.id === command.animation.id);
@@ -139,32 +144,7 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       if (!version) throw new StudioException("GENERATION_VERSION_NOT_FOUND", `Generated version not found: ${command.versionId}`, "input");
       if (!version.output) throw new StudioException("GENERATION_OUTPUT_MISSING", `Generated version ${command.versionId} has no output.`, "input");
       const sequence = sequenceById(next, artifact.scope.sequenceId);
-      const prior = artifact.activeVersionId ? artifact.versions.find((item) => item.id === artifact.activeVersionId) : undefined;
-      if (version.output.mediaId || version.output.animationId) {
-        if (!artifact.scope.clipId) throw new StudioException("GENERATION_CLIP_MISSING", "This generated artifact is not bound to a timeline clip.", "input");
-        const clip = clipById(sequence, artifact.scope.clipId);
-        assertUnlocked(sequence, clip.trackId);
-        if (version.output.mediaId) {
-          if (!next.media.some((item) => item.id === version.output!.mediaId)) throw new StudioException("MISSING_MEDIA", `Generated media not found: ${version.output.mediaId}`, "input");
-          clip.source = { type: "media", mediaId: version.output.mediaId };
-        } else if (version.output.animationId) {
-          if (!next.animations.some((item) => item.id === version.output!.animationId)) throw new StudioException("MISSING_ANIMATION", `Generated animation not found: ${version.output.animationId}`, "input");
-          clip.source = { type: "animation", animationId: version.output.animationId };
-        }
-        addUnique(changed.clips, clip.id);
-      }
-      if (version.output.captions) {
-        const priorIds = new Set(prior?.output?.captions?.map((caption) => caption.id) ?? []);
-        sequence.captions = sequence.captions.filter((caption) => !priorIds.has(caption.id));
-        const existing = new Set(sequence.captions.map((caption) => caption.id));
-        for (const caption of version.output.captions) {
-          if (existing.has(caption.id)) throw new StudioException("DUPLICATE_ID", `Caption id already exists: ${caption.id}`, "input");
-          sequence.captions.push(structuredClone(caption));
-        }
-        addUnique(changed.sequences, sequence.id);
-      }
-      artifact.activeVersionId = version.id;
-      addUnique(changed.generatedArtifacts, artifact.id);
+      activateGenerated(next, artifact, version, sequence, changed);
       sortSequence(sequence);
       continue;
     }
@@ -195,66 +175,89 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       if (sequence.clips.some((clip) => clip.id === command.clip.id)) throw new StudioException("DUPLICATE_ID", `Clip id already exists: ${command.clip.id}`, "input");
       const clip = structuredClone(command.clip);
       clip.playbackRate = rational(clip.playbackRate.numerator, clip.playbackRate.denominator);
-      if (command.mode === "insert") rippleAfter(sequence, clip.startTick, clip.durationTick, new Set(), new Set([clip.trackId]));
-      else if (command.mode === "ripple") rippleAfter(sequence, clip.startTick, clip.durationTick, new Set());
+      if (command.mode === "insert") rippleTimeline(sequence, clip.startTick, clip.durationTick, new Set(), new Set([clip.trackId]),ticksPerSample(next.settings.sampleRate));
+      else if (command.mode === "ripple") rippleTimeline(sequence, clip.startTick, clip.durationTick, new Set(),undefined,ticksPerSample(next.settings.sampleRate));
       else overwriteRange(sequence, clip).forEach((id) => addUnique(changed.clips, id));
       sequence.clips.push(clip);
       addUnique(changed.clips, clip.id);
     } else if (command.type === "clip.move") {
-      const selected = command.clipIds.map((id) => clipById(sequence, id));
+      const explicit = command.clipIds.map((id) => clipById(sequence, id));
+      const selected = relatedClipIds(sequence, command.clipIds).map(id => clipById(sequence, id));
       assertUnlocked(sequence, command.targetTrackId);
       selected.forEach((clip) => assertUnlocked(sequence, clip.trackId));
-      const base = Math.min(...selected.map((clip) => clip.startTick));
+      const base = Math.min(...explicit.map((clip) => clip.startTick));
+      const sourceTrack = explicit.find(clip => clip.startTick === base)!.trackId;
       const deltaTick = command.startTick - base;
-      if (command.ripple) rippleAfter(sequence, base, -Math.max(...selected.map((clip) => clip.durationTick)), new Set(command.clipIds));
+      const selectedIds = new Set(selected.map(clip => clip.id));
+      if (command.ripple) {
+        const finish = Math.max(...selected.map(end)), span = finish - base;
+        if (command.startTick > base && command.startTick < finish) throw new StudioException("RIPPLE_BOUNDARY", "Ripple destination cannot be inside the moving selection.", "input");
+        rippleTimeline(sequence, finish, -span, selectedIds,undefined,ticksPerSample(next.settings.sampleRate));
+        rippleTimeline(sequence, command.startTick, span, selectedIds,undefined,ticksPerSample(next.settings.sampleRate));
+      }
       for (const clip of selected) {
         clip.startTick += deltaTick;
-        clip.trackId = command.targetTrackId;
+        shiftClipAutomation(sequence, clip.id, deltaTick,ticksPerSample(next.settings.sampleRate));
+        if (clip.trackId === sourceTrack) clip.trackId = command.targetTrackId;
         if (clip.startTick < 0) throw new StudioException("NEGATIVE_TIME", "A moved clip would start before zero.", "input");
         addUnique(changed.clips, clip.id);
       }
     } else if (command.type === "clip.trim") {
-      const clip = clipById(sequence, command.clipId);
-      assertUnlocked(sequence, clip.trackId);
-      const oldEnd = end(clip);
-      if (command.edge === "in") {
-        if (command.tick < 0 || command.tick >= oldEnd) throw new StudioException("INVALID_TRIM", "Trim-in must be before the clip end.", "input");
-        const amount = command.tick - clip.startTick;
-        clip.startTick = command.tick;
-        clip.durationTick -= amount;
-        clip.sourceInTick += sourceAdvance(clip, amount);
-      } else {
-        if (command.tick <= clip.startTick) throw new StudioException("INVALID_TRIM", "Trim-out must be after the clip start.", "input");
-        const oldDuration = clip.durationTick;
-        clip.durationTick = command.tick - clip.startTick;
-        if (command.ripple) rippleAfter(sequence, oldEnd, clip.durationTick - oldDuration, new Set([clip.id]));
+      const anchor = clipById(sequence, command.clipId);
+      const selected = relatedClipIds(sequence, [anchor.id]).map(id => clipById(sequence,id));
+      const amount = command.tick - (command.edge === "in" ? anchor.startTick : end(anchor));
+      const oldBoundary = command.edge === "in" ? anchor.startTick : end(anchor);
+      if (selected.some(clip => (command.edge === "in" ? clip.startTick : end(clip)) !== oldBoundary)) throw new StudioException("LINKED_TRIM_BOUNDARY", "Linked or grouped edges must align for a shared trim. Split at a common boundary first.", "input");
+      for (const clip of selected) {
+        assertUnlocked(sequence, clip.trackId);
+        if (command.edge === "in") {
+          clip.sourceInTick += sourceAdvance(clip, amount); clip.durationTick -= amount;
+          if (!command.ripple) clip.startTick += amount;
+        } else clip.durationTick += amount;
+        if (clip.startTick < 0 || clip.sourceInTick < 0 || clip.durationTick <= 0) throw new StudioException("INVALID_TRIM", "Trim exceeds the clip's available source handles.", "input");
+        clip.audio.fadeInTick = Math.min(clip.audio.fadeInTick,clip.durationTick);
+        clip.audio.fadeOutTick = Math.min(clip.audio.fadeOutTick,clip.durationTick-clip.audio.fadeInTick);
+        addUnique(changed.clips,clip.id);
       }
-      addUnique(changed.clips, clip.id);
+      if (command.ripple) {
+        if (command.edge === "in") {
+          for(const clip of selected)shiftClipAutomation(sequence,clip.id,-amount,ticksPerSample(next.settings.sampleRate));
+          // Keep the trimmed source at its original timeline start; close/open its removed head.
+          rippleTimeline(sequence, oldBoundary + Math.max(0,amount), -amount, new Set(selected.map(clip=>clip.id)),undefined,ticksPerSample(next.settings.sampleRate));
+        } else rippleTimeline(sequence, oldBoundary, amount, new Set(selected.map(clip=>clip.id)),undefined,ticksPerSample(next.settings.sampleRate));
+      }
     } else if (command.type === "clip.split") {
-      const clip = clipById(sequence, command.clipId);
-      assertUnlocked(sequence, clip.trackId);
-      if (command.atTick <= clip.startTick || command.atTick >= end(clip)) throw new StudioException("INVALID_SPLIT", "Split point must be inside the clip.", "input");
-      const leftDuration = command.atTick - clip.startTick;
-      const right: Clip = structuredClone(clip);
-      right.id = command.rightClipId;
-      right.startTick = command.atTick;
-      right.durationTick = clip.durationTick - leftDuration;
-      right.sourceInTick += sourceAdvance(clip, leftDuration);
-      clip.durationTick = leftDuration;
-      sequence.clips.push(right);
-      addUnique(changed.clips, clip.id);
-      addUnique(changed.clips, right.id);
+      const anchor = clipById(sequence,command.clipId);
+      const selected = relatedClipIds(sequence,[anchor.id]).map(id=>clipById(sequence,id));
+      const newGroups = new Map<string,string>(), newLinks = new Map<string,string>();
+      const fresh = (map:Map<string,string>,id:string) => { let value=map.get(id); if(!value){value=randomUUID();map.set(id,value);} return value; };
+      for (const clip of selected) {
+        const right = splitClipAt(sequence,clip,command.atTick,clip.id===anchor.id?command.rightClipId:randomUUID());
+        if(right.groupId)right.groupId=fresh(newGroups,right.groupId);
+        if(right.linkedGroupId)right.linkedGroupId=fresh(newLinks,right.linkedGroupId);
+        addUnique(changed.clips,clip.id);addUnique(changed.clips,right.id);
+      }
+    } else if (command.type === "clip.relate") {
+      if(!Array.isArray(command.clipIds)||!command.clipIds.length)throw new StudioException("EMPTY_SELECTION","Select clips to group or link.","input");
+      if(command.relationshipId!==null&&!/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/.test(command.relationshipId))throw new StudioException("INVALID_ID","Relationship ID must be a portable identifier.","input");
+      for(const id of command.clipIds){
+        const clip=clipById(sequence,id);assertUnlocked(sequence,clip.trackId);
+        const key=command.relation==="group"?"groupId":"linkedGroupId";
+        if(command.relationshipId===null)delete clip[key];else clip[key]=command.relationshipId;
+        addUnique(changed.clips,id);
+      }
     } else if (command.type === "clip.remove") {
-      const selected = command.clipIds.map((id) => clipById(sequence, id));
+      const selected = relatedClipIds(sequence, command.clipIds).map((id) => clipById(sequence, id));
       selected.forEach((clip) => assertUnlocked(sequence, clip.trackId));
-      sequence.clips = sequence.clips.filter((clip) => !command.clipIds.includes(clip.id));
-      sequence.transitions = sequence.transitions.filter((transition) => !command.clipIds.includes(transition.fromClipId) && !command.clipIds.includes(transition.toClipId));
+      const removedIds = new Set(selected.map(clip=>clip.id));
+      sequence.clips = sequence.clips.filter(clip=>!removedIds.has(clip.id));
+      cleanupClipReferences(sequence,removedIds);
       if (command.ripple && selected.length > 0) {
         const start = Math.min(...selected.map((clip) => clip.startTick));
         const finish = Math.max(...selected.map(end));
-        rippleAfter(sequence, finish, start - finish, new Set());
+        rippleTimeline(sequence, finish, start - finish, new Set(),undefined,ticksPerSample(next.settings.sampleRate));
       }
-      command.clipIds.forEach((id) => addUnique(changed.clips, id));
+      selected.forEach((clip) => addUnique(changed.clips, clip.id));
     } else if (command.type === "clip.update") {
       const clip = clipById(sequence, command.clipId);
       assertUnlocked(sequence, clip.trackId);
@@ -263,12 +266,13 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       addUnique(changed.clips, clip.id);
     } else if (command.type === "transition.add") {
       if (sequence.transitions.some((item) => item.id === command.transition.id)) throw new StudioException("DUPLICATE_ID", `Transition id already exists: ${command.transition.id}`, "input");
-      clipById(sequence, command.transition.fromClipId);
-      clipById(sequence, command.transition.toClipId);
+      assertUnlocked(sequence,clipById(sequence, command.transition.fromClipId).trackId);
+      assertUnlocked(sequence,clipById(sequence, command.transition.toClipId).trackId);
       sequence.transitions.push(structuredClone(command.transition));
     } else if (command.type === "transition.update") {
       const transition = sequence.transitions.find((item) => item.id === command.transitionId);
       if (!transition) throw new StudioException("TRANSITION_NOT_FOUND", `Transition not found: ${command.transitionId}`, "input");
+      assertUnlocked(sequence,clipById(sequence,transition.fromClipId).trackId);assertUnlocked(sequence,clipById(sequence,transition.toClipId).trackId);
       Object.assign(transition, structuredClone(command.patch));
     } else if (command.type === "transition.remove") {
       sequence.transitions = sequence.transitions.filter((transition) => transition.id !== command.transitionId);
@@ -278,6 +282,12 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       else sequence.automation.push(structuredClone(command.lane));
     } else if (command.type === "automation.remove") {
       sequence.automation = sequence.automation.filter((lane) => lane.id !== command.laneId);
+    } else if(command.type==="qc.allowance.set"){
+      const allowances=sequence.qcAllowances??[],index=allowances.findIndex(item=>item.id===command.allowance.id);
+      if(index<0)allowances.push(structuredClone(command.allowance));else allowances[index]=structuredClone(command.allowance);
+      sequence.qcAllowances=allowances;
+    } else if(command.type==="qc.allowance.remove"){
+      sequence.qcAllowances=(sequence.qcAllowances??[]).filter(item=>item.id!==command.allowanceId);
     } else if (command.type === "marker.add") {
       if (sequence.markers.some((marker) => marker.id === command.marker.id)) throw new StudioException("DUPLICATE_ID", `Marker id already exists: ${command.marker.id}`, "input");
       sequence.markers.push(structuredClone(command.marker));
@@ -327,6 +337,21 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       throw new StudioException("UNKNOWN_COMMAND", `Unknown project command: ${(command as { type?: unknown }).type ?? "missing type"}`, "input");
     }
     sortSequence(sequence);
+  }
+  for (const artifact of next.generatedArtifacts) {
+    const sequence = next.sequences.find(item=>item.id===artifact.scope.sequenceId);
+    if(artifact.scope.trackId&&!sequence?.tracks.some(track=>track.id===artifact.scope.trackId))delete artifact.scope.trackId;
+    if(artifact.clipBindings){
+      artifact.clipBindings=artifact.clipBindings.filter(binding=>sequence?.clips.some(clip=>clip.id===binding.clipId));
+      if(artifact.clipBindings.length){artifact.scope.clipId=artifact.clipBindings[0]!.clipId;}
+      else {delete artifact.clipBindings;delete artifact.scope.clipId;delete artifact.activeVersionId;}
+      continue;
+    }
+    if (artifact.scope.clipId) {
+      const clip=sequence?.clips.find(item=>item.id===artifact.scope.clipId);
+      if (clip) { artifact.scope.startTick=clip.startTick;artifact.scope.durationTick=clip.durationTick;artifact.scope.trackId=clip.trackId; }
+      else if(artifact.activeVersionId) { delete artifact.scope.clipId;delete artifact.activeVersionId; }
+    }
   }
   return { project: next, changed, warnings };
 }

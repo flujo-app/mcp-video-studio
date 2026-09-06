@@ -41,7 +41,7 @@ describe("MCP App display modes", () => {
 
     expect(bridge.STUDIO_DISPLAY_MODES).toEqual(["inline", "fullscreen", "pip"]);
     expect(mocks.appConstructor).toHaveBeenCalledWith(
-      { name: "MCP Video Studio", version: "0.1.0" },
+      { name: "MCP Video Studio", version: "0.1.1" },
       { availableDisplayModes: ["inline", "fullscreen", "pip"] },
       { autoResize: true },
     );

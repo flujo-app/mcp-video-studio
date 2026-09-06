@@ -2,7 +2,7 @@ import type { Rational } from "./time.js";
 
 export type UUID = string;
 export type TrackType = "video" | "audio" | "overlay" | "caption";
-export type MediaKind = "video" | "audio" | "image" | "font" | "subtitle" | "animation";
+export type MediaKind = "video" | "audio" | "image" | "font" | "lut" | "subtitle" | "animation";
 export type InsertMode = "overwrite" | "insert" | "ripple" | "replace";
 export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "darken" | "lighten" | "difference";
 export type Curve = "hold" | "linear" | "easeIn" | "easeOut" | "easeInOut" | "easeOutExpo" | "overshoot";
@@ -47,6 +47,7 @@ export interface MediaAsset {
   probe: MediaProbe;
   createdAt: string;
   offline?: boolean;
+  retiming?:{version:1;operationId:string;mode:"freeze"|"reverse"|"linear-ramp";sourceMediaId:UUID;sourceSha256:string;sourceStartTick:number;sourceEndTick:number;durationTick:number;clipSourceInTick:number;startRate:number;endRate:number;freezeAtTick?:number};
 }
 
 export interface Track {
@@ -61,6 +62,7 @@ export interface Track {
   hidden: boolean;
   gainDb: number;
   pan: number;
+  effects?: EffectInstance[];
 }
 
 export interface Transform {
@@ -153,6 +155,14 @@ export interface Marker {
 }
 
 export interface CaptionStyle {
+  fontMediaId?: UUID;
+  outlineColor?: string;
+  outlineWidth?: number;
+  shadowColor?: string;
+  shadowOffset?: number;
+  marginLeft?: number;
+  marginRight?: number;
+  marginVertical?: number;
   fontFamily: string;
   fontSize: number;
   color: string;
@@ -170,6 +180,8 @@ export interface CaptionCue {
   style: CaptionStyle;
 }
 
+export interface QcAllowance { id:UUID;checkId:"video.black"|"video.freeze"|"audio.silence";startTick:number;endTick:number;reason:string }
+
 export interface Sequence {
   id: UUID;
   name: string;
@@ -179,9 +191,11 @@ export interface Sequence {
   automation: AutomationLane[];
   markers: Marker[];
   captions: CaptionCue[];
+  qcAllowances?:QcAllowance[];
+  audioMaster?:{gainDb:number;pan:number;effects:EffectInstance[]};
 }
 
-export type AnimationNodeType = "group" | "text" | "rect" | "ellipse" | "line" | "path" | "image" | "video" | "camera";
+export type AnimationNodeType = "group" | "text" | "rect" | "ellipse" | "line" | "path" | "image" | "video" | "camera" | "particles";
 
 export interface AnimationNode {
   id: UUID;
@@ -194,7 +208,7 @@ export interface AnimationNode {
 
 export interface AnimationOperation {
   id: UUID;
-  type: "create" | "write" | "fade" | "transform" | "moveAlongPath" | "rotate" | "scale" | "wait";
+  type: "create" | "write" | "fade" | "transform" | "moveAlongPath" | "rotate" | "scale" | "wait" | "morph" | "property";
   targetId: UUID;
   startTick: number;
   durationTick: number;
@@ -248,7 +262,16 @@ export interface GenerationProvenance {
   requestId?: string;
 }
 
+export interface GeneratedSegment {
+  offsetTick: number;
+  durationTick: number;
+  source: { type: "media"; mediaId: UUID } | { type: "animation"; animationId: UUID };
+  sourceInTick: number;
+}
+
 export interface GeneratedArtifactOutput {
+  /** Complete composition; each region keeps its original source and offset. */
+  segments?: GeneratedSegment[];
   mediaId?: UUID;
   animationId?: UUID;
   captions?: CaptionCue[];
@@ -261,6 +284,9 @@ export interface GenerationReview {
 }
 
 export interface GeneratedArtifactVersion {
+  /** Region is relative to artifact.scope, not to the current playhead. */
+  region?: { offsetTick: number; durationTick: number };
+  autoActivate?: boolean;
   id: UUID;
   parentVersionId?: UUID;
   status: GeneratedVersionStatus;
@@ -273,6 +299,8 @@ export interface GeneratedArtifactVersion {
 }
 
 export interface GeneratedArtifact {
+  /** Persisted ownership of split clips; unrelated timeline clips are never replaced. */
+  clipBindings?: Array<{ clipId: UUID; offsetTick: number; durationTick: number }>;
   id: UUID;
   kind: GeneratedArtifactKind;
   name: string;
@@ -285,8 +313,8 @@ export interface GeneratedArtifact {
 export interface ExportPreset {
   id: UUID;
   name: string;
-  container: "mp4" | "webm" | "mkv" | "gif" | "wav";
-  videoCodec?: "libx264" | "libx265" | "libvpx-vp9" | "ffv1" | "gif";
+  container: "mp4" | "webm" | "mkv" | "gif" | "wav" | "zip";
+  videoCodec?: "libx264" | "libx265" | "libvpx-vp9" | "ffv1" | "gif" | "png";
   audioCodec?: "aac" | "libopus" | "flac" | "pcm_s24le";
   crf?: number;
   videoBitrate?: string;
@@ -295,7 +323,7 @@ export interface ExportPreset {
 }
 
 export interface StudioProject {
-  schemaVersion: 1;
+  schemaVersion: 2;
   projectId: UUID;
   revision: number;
   name: string;
@@ -345,7 +373,7 @@ export type StudioResult<T> = ({ success: true } & T) | FailureResult;
 
 export interface JobRecord {
   id: UUID;
-  type: "probe" | "proxy" | "thumbnail" | "waveform" | "preview" | "render" | "animation" | "generation" | "qc";
+  type: "probe" | "proxy" | "thumbnail" | "waveform" | "preview" | "render" | "animation" | "generation" | "qc" | "archive" | "media";
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   progress: number;
   message: string;
@@ -355,14 +383,33 @@ export interface JobRecord {
   error?: StudioError;
 }
 
+export type AdvancedProjectCommand =
+  | import("./audio-parameters.js").AudioParameterRangeCommand
+  | import("./audio-parameters.js").AudioDuckingCommand
+  | { type: "clip.slip"; sequenceId: UUID; clipId: UUID; deltaTick: number }
+  | { type: "clip.roll"; sequenceId: UUID; clipId: UUID; tick: number }
+  | { type: "clip.slide"; sequenceId: UUID; clipId: UUID; deltaTick: number }
+  | { type: "gap.remove"; sequenceId: UUID; startTick: number; endTick: number }
+  | { type: "audio.gain.range"; sequenceId: UUID; targetType: "clip" | "track"; targetId: UUID; startTick: number; endTick: number; gainDb: number; laneId?: UUID }
+  | { type: "animation.node.add"; animationId: UUID; node: AnimationNode }
+  | { type: "animation.node.update"; animationId: UUID; nodeId: UUID; patch: Partial<Pick<AnimationNode, "name" | "properties" | "transform">> & { parentId?: UUID | null } }
+  | { type: "animation.node.remove"; animationId: UUID; nodeId: UUID; cascade: boolean }
+  | { type: "animation.operation.add"; animationId: UUID; operation: AnimationOperation }
+  | { type: "animation.operation.update"; animationId: UUID; operationId: UUID; patch: Partial<Omit<AnimationOperation, "id">> }
+  | { type: "animation.operation.remove"; animationId: UUID; operationId: UUID }
+  | { type: "animation.operations.reorder"; animationId: UUID; operationIds: UUID[] };
+
 export type ProjectCommand =
+  | {type:"audio.master.set";sequenceId:string;master:NonNullable<Sequence["audioMaster"]>}
+  | AdvancedProjectCommand
   | { type: "track.add"; sequenceId: UUID; track: Omit<Track, "sequenceId"> }
-  | { type: "track.update"; sequenceId: UUID; trackId: UUID; patch: Partial<Pick<Track, "name" | "order" | "locked" | "muted" | "solo" | "hidden" | "gainDb" | "pan">> }
+  | { type: "track.update"; sequenceId: UUID; trackId: UUID; patch: Partial<Pick<Track, "name" | "order" | "locked" | "muted" | "solo" | "hidden" | "gainDb" | "pan" | "effects">> }
   | { type: "track.remove"; sequenceId: UUID; trackId: UUID; removeClips: boolean }
   | { type: "clip.add"; sequenceId: UUID; clip: Clip; mode: InsertMode }
   | { type: "clip.move"; sequenceId: UUID; clipIds: UUID[]; targetTrackId: UUID; startTick: number; ripple: boolean }
   | { type: "clip.trim"; sequenceId: UUID; clipId: UUID; edge: "in" | "out"; tick: number; ripple: boolean }
   | { type: "clip.split"; sequenceId: UUID; clipId: UUID; atTick: number; rightClipId: UUID }
+  | { type: "clip.relate"; sequenceId: UUID; clipIds: UUID[]; relation: "group" | "link"; relationshipId: UUID | null }
   | { type: "clip.remove"; sequenceId: UUID; clipIds: UUID[]; ripple: boolean }
   | { type: "clip.update"; sequenceId: UUID; clipId: UUID; patch: Partial<Pick<Clip, "name" | "sourceInTick" | "durationTick" | "playbackRate" | "enabled" | "transform" | "crop" | "blendMode" | "effects" | "audio" | "linkedGroupId" | "groupId">> }
   | { type: "transition.add"; sequenceId: UUID; transition: Transition }
@@ -370,6 +417,8 @@ export type ProjectCommand =
   | { type: "transition.remove"; sequenceId: UUID; transitionId: UUID }
   | { type: "automation.set"; sequenceId: UUID; lane: AutomationLane }
   | { type: "automation.remove"; sequenceId: UUID; laneId: UUID }
+  | { type: "qc.allowance.set"; sequenceId:UUID; allowance:QcAllowance }
+  | { type: "qc.allowance.remove"; sequenceId:UUID; allowanceId:UUID }
   | { type: "marker.add"; sequenceId: UUID; marker: Marker }
   | { type: "marker.update"; sequenceId: UUID; markerId: UUID; patch: Partial<Pick<Marker, "tick" | "durationTick" | "label" | "color">> }
   | { type: "marker.remove"; sequenceId: UUID; markerId: UUID }
@@ -381,4 +430,8 @@ export type ProjectCommand =
   | { type: "generation.version.add"; artifactId: UUID; version: GeneratedArtifactVersion }
   | { type: "generation.version.update"; artifactId: UUID; versionId: UUID; patch: Partial<Pick<GeneratedArtifactVersion, "status" | "output" | "review" | "error">> }
   | { type: "generation.version.activate"; artifactId: UUID; versionId: UUID }
-  | { type: "project.rename"; name: string };
+  | { type: "project.rename"; name: string }
+  | { type: "sequence.add"; sequence: Sequence }
+  | { type: "sequence.rename"; sequenceId: UUID; name: string }
+  | { type: "sequence.activate"; sequenceId: UUID }
+  | { type: "sequence.remove"; sequenceId: UUID };

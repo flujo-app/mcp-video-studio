@@ -1,21 +1,62 @@
-name: ci
-
+name: CI
 on:
   push:
+    branches: [master]
   pull_request:
-
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+permissions:
+  contents: read
 jobs:
-  check:
+  acceptance:
     strategy:
+      fail-fast: false
       matrix:
-        os: [ubuntu-latest, windows-latest]
-        node: [20, 22]
+        os: [ubuntu-latest, windows-latest, macos-latest]
+        node: [22, 24]
     runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: actions/setup-node@v4
         with:
           node-version: ${{ matrix.node }}
           cache: npm
-      - run: npm ci --ignore-scripts
+      - run: npm ci
+      - name: Install FFmpeg on Linux
+        if: runner.os == 'Linux'
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y ffmpeg fonts-dejavu-core
+      - name: Install FFmpeg on Windows
+        if: runner.os == 'Windows'
+        run: choco install ffmpeg --yes --no-progress
+      - name: Install FFmpeg on macOS
+        if: runner.os == 'macOS'
+        run: |
+          brew install ffmpeg-full
+          printf "%s/bin\n" "$(brew --prefix ffmpeg-full)" >> "$GITHUB_PATH"
+      - run: npx patchright install --with-deps chromium
       - run: npm run check
+      - name: Real render, browser, security and failure acceptance
+        run: npm test
+        env:
+          RUN_FFMPEG_INTEGRATION: "1"
+          RUN_BROWSER_INTEGRATION: "1"
+      - name: Full 30-second 1080p MCP production and delivery acceptance
+        run: npx vitest run tests/promo-production.integration.test.ts
+        env:
+          RUN_PROMO_INTEGRATION: "1"
+      - name: Clean packed installation and actual modern/legacy clients
+        run: npm run check:package
+        env:
+          RUN_BROWSER_INTEGRATION: "1"
+      - name: Full 30-minute mixed-media editor and range-cache acceptance
+        if: runner.os == 'Linux' && matrix.node == 22
+        run: npx vitest run tests/long-project.integration.test.ts
+        env:
+          RUN_LONG_INTEGRATION: "1"
+          RUN_FFMPEG_INTEGRATION: "1"
+          RUN_BROWSER_INTEGRATION: "1"
+      - run: npm audit --omit=dev --audit-level=moderate

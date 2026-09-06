@@ -1,3 +1,5 @@
+import {probeLut} from "./luts.js";
+import {probeFont} from "./fonts.js";
 import path from "node:path";
 import { rational, secondsToTicks, type MediaKind, type MediaProbe, type Rational } from "@mcp-video-studio/contracts";
 import { StudioException } from "@mcp-video-studio/core";
@@ -37,7 +39,9 @@ function firstFinite(...values: Array<string | undefined>): number {
 }
 
 export async function probeMedia(filePath: string, config: StudioConfig, signal?: AbortSignal): Promise<MediaProbe> {
-  const result = await runChecked(config.ffprobePath, ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", path.resolve(filePath)], { signal, timeoutMs: 60_000 });
+  if(path.extname(filePath).toLowerCase()===".cube")return probeLut(filePath,signal);
+  if([".ttf",".otf",".woff",".woff2",".ttc"].includes(path.extname(filePath).toLowerCase()))return probeFont(filePath);
+  const result = await runChecked(config.ffprobePath, ["-protocol_whitelist", "file,pipe,data", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path.resolve(filePath)], { signal, timeoutMs: 60_000 });
   let data: FfprobeJson;
   try { data = JSON.parse(result.stdout) as FfprobeJson; }
   catch { throw new StudioException("INVALID_PROBE_OUTPUT", "ffprobe returned invalid JSON.", "runtime", { stdout: result.stdout }); }
@@ -59,6 +63,7 @@ export async function probeMedia(filePath: string, config: StudioConfig, signal?
 
 export function mediaKindFor(filePath: string, probe: MediaProbe): MediaKind {
   const extension = path.extname(filePath).toLowerCase();
+  if(extension===".cube")return "lut";
   if ([".ttf", ".otf", ".woff", ".woff2"].includes(extension)) return "font";
   if ([".srt", ".vtt", ".ass", ".ssa"].includes(extension)) return "subtitle";
   if ([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif", ".svg"].includes(extension) && !probe.hasAudio) return "image";
@@ -68,6 +73,6 @@ export function mediaKindFor(filePath: string, probe: MediaProbe): MediaKind {
 }
 
 export async function verifyDecode(filePath: string, config: StudioConfig, signal?: AbortSignal): Promise<Record<string, unknown>> {
-  const result = await runChecked(config.ffmpegPath, ["-hide_banner", "-v", "error", "-xerror", "-i", path.resolve(filePath), "-map", "0", "-f", "null", "-"], { signal, timeoutMs: 12 * 60 * 60_000 });
+  const result = await runChecked(config.ffmpegPath, ["-hide_banner", "-v", "error", "-xerror", "-protocol_whitelist", "file,pipe,data", "-i", path.resolve(filePath), "-map", "0", "-f", "null", "-"], { signal, timeoutMs: 12 * 60 * 60_000 });
   return { success: true, path: path.resolve(filePath), durationMs: result.durationMs, stderr: result.stderr };
 }

@@ -4,8 +4,9 @@ import path from "node:path";
 import { createDefaultProject, type MutationResult, type ProjectCommand, type ProjectDelta, type StudioProject } from "@mcp-video-studio/contracts";
 import { applyProjectCommands } from "./commands.js";
 import { StudioException } from "./errors.js";
-import { readJson, writeJson } from "./fs.js";
-import { historyRedo, historyUndo, recordHistory, verifyHistory } from "./history.js";
+import { confinedPath, readJson, writeJson } from "./fs.js";
+import { projectWriteLock } from "./file-lock.js";
+import { commitProject, historyRedo, historyUndo, recordHistory, verifyHistory } from "./history.js";
 import { validateProject } from "./validation.js";
 
 type Lock = Promise<void>;
@@ -18,7 +19,7 @@ async function underLock<T>(key: string, operation: () => Promise<T>): Promise<T
   const queued = prior.then(() => current);
   locks.set(key, queued);
   await prior;
-  try { return await operation(); }
+  try { return await projectWriteLock(key,operation); }
   finally {
     release();
     if (locks.get(key) === queued) locks.delete(key);
@@ -45,6 +46,7 @@ export class ProjectStore {
 
   constructor(root: string) {
     this.root = path.resolve(root);
+    for(const name of ["project.json","assets","fonts","proxies","cache","history/transactions","jobs","exports"])confinedPath(this.root,path.join(this.root,name));
   }
 
   static async create(root: string, name: string): Promise<ProjectStore> {
@@ -57,7 +59,7 @@ export class ProjectStore {
     }
     await Promise.all(["assets", "fonts", "proxies", "cache", "history/transactions", "jobs", "exports"].map((directory) => mkdir(path.join(store.root, directory), { recursive: true })));
     const project = validateProject(createDefaultProject(name));
-    await writeJson(projectFile(store.root), project);
+    await writeJson(projectFile(store.root), {...project,_history:{past:[],future:[]}});
     return store;
   }
 
@@ -66,6 +68,7 @@ export class ProjectStore {
   }
 
   async mutate(expectedRevision: number, commands: ProjectCommand[]): Promise<MutationResult> {
+    if (!Array.isArray(commands) || commands.length > 1000) throw new StudioException("TRANSACTION_LIMIT", "Use between 1 and 1000 commands.", "input");
     if (commands.length === 0) throw new StudioException("EMPTY_TRANSACTION", "Provide at least one command.", "input");
     return underLock(this.root, async () => {
       const before = await this.read();
@@ -76,7 +79,6 @@ export class ProjectStore {
       applied.project.updatedAt = now;
       const after = validateProject(applied.project);
       const transactionId = randomUUID();
-      await writeJson(projectFile(this.root), after);
       await recordHistory(this.root, { id: transactionId, createdAt: now, commands: structuredClone(commands), before, after });
       return { success: true, projectId: after.projectId, revision: after.revision, transactionId, changed: applied.changed, warnings: applied.warnings };
     });
@@ -86,13 +88,12 @@ export class ProjectStore {
     return underLock(this.root, async () => {
       const before = await this.read();
       if (before.revision !== expectedRevision) throw new StudioException("REVISION_CONFLICT", "Project revision changed.", "conflict", { expectedRevision, actualRevision: before.revision });
-      const after = structuredClone(before);
+      let after = structuredClone(before);
       mutator(after);
       after.revision += 1;
       after.updatedAt = new Date().toISOString();
-      validateProject(after);
+      after = validateProject(after);
       const transactionId = randomUUID();
-      await writeJson(projectFile(this.root), after);
       await recordHistory(this.root, { id: transactionId, createdAt: after.updatedAt, commands: [], before, after });
       return { success: true, projectId: after.projectId, revision: after.revision, transactionId, changed, warnings: [] };
     });
@@ -106,8 +107,8 @@ export class ProjectStore {
       if (!restored) throw new StudioException("NOTHING_TO_UNDO", "There is no transaction to undo.", "input");
       restored.project.revision = current.revision + 1;
       restored.project.updatedAt = new Date().toISOString();
-      validateProject(restored.project);
-      await writeJson(projectFile(this.root), restored.project);
+      restored.project=validateProject(restored.project);
+      await commitProject(this.root, restored.project, restored.state);
       return { success: true, projectId: current.projectId, revision: restored.project.revision, transactionId: `undo:${restored.transactionId}`, changed: changedEverything(restored.project), warnings: [] };
     });
   }
@@ -120,8 +121,8 @@ export class ProjectStore {
       if (!restored) throw new StudioException("NOTHING_TO_REDO", "There is no transaction to redo.", "input");
       restored.project.revision = current.revision + 1;
       restored.project.updatedAt = new Date().toISOString();
-      validateProject(restored.project);
-      await writeJson(projectFile(this.root), restored.project);
+      restored.project=validateProject(restored.project);
+      await commitProject(this.root, restored.project, restored.state);
       return { success: true, projectId: current.projectId, revision: restored.project.revision, transactionId: `redo:${restored.transactionId}`, changed: changedEverything(restored.project), warnings: [] };
     });
   }

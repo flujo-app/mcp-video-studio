@@ -4,3 +4,9 @@ export * from "./history.js";
 export * from "./validation.js";
 export * from "./commands.js";
 export * from "./store.js";
+
+export * from "./advanced.js";
+
+export * from "./transitions.js";
+
+export * from "./nesting.js";

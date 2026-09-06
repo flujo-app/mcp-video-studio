@@ -39,7 +39,7 @@ The implementation sequence and current gaps are in [ROADMAP.md](./ROADMAP.md). 
 
 ## Requirements
 
-- Node.js 20 or newer
+- Node.js 22 or newer
 - FFmpeg and ffprobe available on `PATH`, or configured with environment variables
 - Chromium for animation rendering (`npm run runtime:install` in a source checkout)
 
@@ -56,11 +56,12 @@ npm run check
 npm start
 ```
 
-`npm start` uses stdio for MCP. It writes MCP protocol data only to stdout and prints the authenticated human-editor URL to stderr.
+`npm start` uses stdio for MCP. It writes MCP protocol data only to stdout and prints the editor origin to stderr. Use the open_studio tool to obtain its separate access link.
 
 Run the standalone Streamable HTTP endpoint instead:
 
 ```powershell
+$env:VIDEO_STUDIO_MCP_TOKEN = "<32-or-more-URL-safe-random-characters>"
 npm run serve
 ```
 
@@ -209,3 +210,26 @@ Run `npm run release:check` to validate the release helper without publishing.
 ## License
 
 MIT
+
+## Unreleased 2026 remediation
+
+See [REMEDIATION.md](./REMEDIATION.md) for SDK 2 modern/legacy compatibility, required HTTP authentication, new editor workflows, archive format, tests and remaining pre-v1 acceptance work. No new npm release is implied by this branch.
+
+### macOS media dependencies
+
+Homebrew's minimal ffmpeg formula does not include the drawtext filter used by
+caption burn-in. Install the full formula, and put its bin directory first in PATH,
+or set VIDEO_STUDIO_FFMPEG_PATH and VIDEO_STUDIO_FFPROBE_PATH to those executables.
+Run brew install ffmpeg-full and use the bin directory returned by brew --prefix
+ffmpeg-full.
+
+The doctor reports a missing required filter before a caption job starts. See
+[Homebrew's full formula](https://formulae.brew.sh/formula/ffmpeg-full).
+The renderer detects current FFmpeg script-file support and retains compatibility
+with older distributions using the former filter_complex_script option.
+
+Audio editing supports sample-aligned gain, pan and effect ranges, voiceover ducking, track and final mix processing, and decoded preview meters. See [audio workflow and measured preview/export tolerances](AUDIO_ACCEPTANCE.md) for controls, MCP tools, processing limits and reproducible acceptance tests.
+
+Export formats, exact ranges, PNG ZIP manifests and actual encoder selection are documented in [EXPORTS.md](EXPORTS.md).
+
+Managed color LUT import, preview, portable archives and saved-export verification are documented in [LUTS.md](LUTS.md).

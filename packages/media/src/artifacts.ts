@@ -11,8 +11,7 @@ export async function ffmpegArtifact(config: StudioConfig, argsBeforeOutput: str
   const extension = path.extname(output);
   const temporary = path.join(path.dirname(output), `.${path.basename(output, extension)}.${randomUUID()}.tmp${extension}`);
   try {
-    const result = await runChecked(config.ffmpegPath, ["-hide_banner", "-y", ...argsBeforeOutput, temporary], options);
-    await rm(output, { force: true });
+    const result = await runChecked(config.ffmpegPath, ["-hide_banner", "-y", ...argsBeforeOutput.flatMap(arg => arg === "-i" ? ["-protocol_whitelist", "file,pipe,data", arg] : [arg]), temporary], options);
     await rename(temporary, output);
     return result;
   } catch (error) {

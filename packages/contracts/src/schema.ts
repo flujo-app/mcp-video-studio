@@ -3,7 +3,7 @@ import { TICKS_PER_SECOND } from "./time.js";
 
 const safeInteger = z.number().int().safe();
 const positiveTick = safeInteger.positive();
-const id = z.string().min(1).max(200);
+const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/);
 const rationalSchema = z.object({
   numerator: safeInteger,
   denominator: safeInteger.refine((value) => value !== 0, "Denominator cannot be zero.")
@@ -34,7 +34,8 @@ const trackSchema = z.object({
   solo: z.boolean(),
   hidden: z.boolean(),
   gainDb: z.number().finite().min(-120).max(24),
-  pan: z.number().finite().min(-1).max(1)
+  pan: z.number().finite().min(-1).max(1),
+  effects: z.array(effectSchema).max(64).default([])
 });
 
 const clipSchema = z.object({
@@ -75,6 +76,7 @@ const captionSchema = z.object({
   durationTick: positiveTick,
   text: z.string().min(1).max(10_000),
   style: z.object({
+    fontMediaId:id.optional(),outlineColor:z.string().optional(),outlineWidth:z.number().finite().min(0).max(128).optional(),shadowColor:z.string().optional(),shadowOffset:z.number().finite().min(0).max(128).optional(),marginLeft:z.number().finite().min(0).max(8192).optional(),marginRight:z.number().finite().min(0).max(8192).optional(),marginVertical:z.number().finite().min(0).max(8192).optional(),
     fontFamily: z.string().min(1).max(200),
     fontSize: z.number().finite().positive().max(500),
     color: z.string().min(1),
@@ -84,7 +86,9 @@ const captionSchema = z.object({
   })
 });
 
+export const AudioMasterSchema=z.object({gainDb:z.number().finite().min(-120).max(24),pan:z.number().finite().min(-1).max(1),effects:z.array(effectSchema).max(64)});
 const sequenceSchema = z.object({
+  audioMaster:AudioMasterSchema.optional(),
   id,
   name: z.string().min(1).max(200),
   tracks: z.array(trackSchema),
@@ -101,24 +105,25 @@ const sequenceSchema = z.object({
   automation: z.array(z.object({
     id,
     sequenceId: id,
-    target: id,
+    target: z.string().min(1).max(500),
     enabled: z.boolean(),
     points: z.array(z.object({ tick: safeInteger.nonnegative(), value: z.number().finite(), curve: z.enum(["hold", "linear", "easeIn", "easeOut", "easeInOut", "easeOutExpo", "overshoot"]) }))
   })),
   markers: z.array(z.object({ id, tick: safeInteger.nonnegative(), durationTick: safeInteger.nonnegative(), label: z.string(), color: z.string() })),
-  captions: z.array(captionSchema).default([])
+  captions: z.array(captionSchema).default([]),
+  qcAllowances:z.array(z.object({id,checkId:z.enum(["video.black","video.freeze","audio.silence"]),startTick:safeInteger.nonnegative(),endTick:positiveTick,reason:z.string().trim().min(1).max(1000)}).refine(item=>item.endTick>item.startTick,"Allowance must cover a positive interval.")).max(1000).default([])
 });
 
 const animationSchema = z.object({
   id,
   name: z.string().min(1).max(200),
   durationTick: positiveTick,
-  canvas: z.object({ width: safeInteger.positive(), height: safeInteger.positive(), background: z.string() }),
+  canvas: z.object({ width: safeInteger.positive().max(4096), height: safeInteger.positive().max(4096), background: z.string() }),
   seed: safeInteger,
   mode: z.enum(["declarative", "html"]),
-  html: z.string().optional(),
-  nodes: z.array(z.object({ id, parentId: id.optional(), type: z.enum(["group", "text", "rect", "ellipse", "line", "path", "image", "video", "camera"]), name: z.string(), properties: z.record(z.string(), z.unknown()), transform: transformSchema })),
-  operations: z.array(z.object({ id, type: z.enum(["create", "write", "fade", "transform", "moveAlongPath", "rotate", "scale", "wait"]), targetId: id, startTick: safeInteger.nonnegative(), durationTick: safeInteger.nonnegative(), easing: z.enum(["hold", "linear", "easeIn", "easeOut", "easeInOut", "easeOutExpo", "overshoot"]), parameters: z.record(z.string(), z.unknown()) })),
+  html: z.string().max(2_000_000).optional(),
+  nodes: z.array(z.object({ id, parentId: id.optional(), type: z.enum(["group", "text", "rect", "ellipse", "line", "path", "image", "video", "camera", "particles"]), name: z.string(), properties: z.record(z.string(), z.unknown()), transform: transformSchema })),
+  operations: z.array(z.object({ id, type: z.enum(["create", "write", "fade", "transform", "moveAlongPath", "rotate", "scale", "wait", "morph", "property"]), targetId: id, startTick: safeInteger.nonnegative(), durationTick: safeInteger.nonnegative(), easing: z.enum(["hold", "linear", "easeIn", "easeOut", "easeInOut", "easeOutExpo", "overshoot"]), parameters: z.record(z.string(), z.unknown()) })),
   htmlAssetId: id.optional()
 });
 
@@ -145,23 +150,26 @@ const generatedArtifactSchema = z.object({
     trackId: id.optional(),
     clipId: id.optional()
   }),
+  clipBindings: z.array(z.object({ clipId: id, offsetTick: safeInteger.nonnegative(), durationTick: positiveTick })).max(1024).optional(),
   activeVersionId: id.optional(),
   approvedVersionId: id.optional(),
   versions: z.array(z.object({
     id,
     parentVersionId: id.optional(),
+    region: z.object({ offsetTick: safeInteger.nonnegative(), durationTick: positiveTick }).optional(),
+    autoActivate: z.boolean().optional(),
     status: z.enum(["queued", "generating", "draft", "approved", "rejected", "failed", "superseded"]),
     request: generationRequestSchema,
     provenance: z.object({ provider: id, model: z.string().max(300), requestHash: z.string().regex(/^[a-f0-9]{64}$/), sourceRevision: safeInteger.nonnegative(), requestId: z.string().optional() }),
     createdAt: z.string(),
-    output: z.object({ mediaId: id.optional(), animationId: id.optional(), captions: z.array(captionSchema).optional() }).optional(),
+    output: z.object({ segments: z.array(z.object({ offsetTick: safeInteger.nonnegative(), durationTick: positiveTick, sourceInTick: safeInteger.nonnegative(), source: z.discriminatedUnion("type", [z.object({type:z.literal("media"),mediaId:id}),z.object({type:z.literal("animation"),animationId:id})]) })).max(1024).optional(), mediaId: id.optional(), animationId: id.optional(), captions: z.array(captionSchema).optional() }).optional(),
     review: z.object({ reviewer: z.string().min(1).max(300), reviewedAt: z.string(), note: z.string().max(10_000).optional() }).optional(),
     error: z.object({ code: z.string(), message: z.string(), category: z.enum(["input", "conflict", "policy", "runtime", "dependency"]), details: z.record(z.string(), z.unknown()).optional() }).optional()
   })).min(1)
 });
 
 export const StudioProjectSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   projectId: id,
   revision: safeInteger.nonnegative(),
   name: z.string().min(1).max(200),
@@ -177,10 +185,10 @@ export const StudioProjectSchema = z.object({
   media: z.array(z.object({
     id,
     name: z.string().min(1),
-    kind: z.enum(["video", "audio", "image", "font", "subtitle", "animation"]),
+    kind: z.enum(["video", "audio", "image", "font", "lut", "subtitle", "animation"]),
     mimeType: z.string().optional(),
     storage: z.discriminatedUnion("mode", [
-      z.object({ mode: z.literal("managed"), sha256: z.string().regex(/^[a-f0-9]{64}$/), relativePath: z.string().min(1), bytes: safeInteger.nonnegative() }),
+      z.object({ mode: z.literal("managed"), sha256: z.string().regex(/^[a-f0-9]{64}$/), relativePath: z.string().min(1).max(4096).refine(value => !value.includes("\\") && !value.includes(":") && !value.startsWith("/") && value.split("/").every(segment => segment !== ".." && segment !== "." && segment !== ""), "Managed media paths must be portable relative paths."), bytes: safeInteger.nonnegative() }),
       z.object({ mode: z.literal("linked"), path: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: safeInteger.nonnegative(), mtimeMs: z.number().nonnegative() })
     ]),
     probe: z.object({
@@ -196,6 +204,7 @@ export const StudioProjectSchema = z.object({
       sampleRate: safeInteger.positive().optional(),
       channels: safeInteger.positive().optional()
     }),
+    retiming:z.object({version:z.literal(1),operationId:z.string().uuid(),mode:z.enum(["freeze","reverse","linear-ramp"]),sourceMediaId:id,sourceSha256:z.string().regex(/^[a-f0-9]{64}$/),sourceStartTick:safeInteger.nonnegative(),sourceEndTick:safeInteger.nonnegative(),durationTick:positiveTick,clipSourceInTick:safeInteger.nonnegative(),startRate:z.number().finite().min(.25).max(4),endRate:z.number().finite().min(.25).max(4),freezeAtTick:safeInteger.nonnegative().optional()}).optional(),
     createdAt: z.string(),
     offline: z.boolean().optional()
   })),
@@ -205,8 +214,8 @@ export const StudioProjectSchema = z.object({
   exportPresets: z.array(z.object({
     id,
     name: z.string(),
-    container: z.enum(["mp4", "webm", "mkv", "gif", "wav"]),
-    videoCodec: z.enum(["libx264", "libx265", "libvpx-vp9", "ffv1", "gif"]).optional(),
+    container: z.enum(["mp4", "webm", "mkv", "gif", "wav", "zip"]),
+    videoCodec: z.enum(["libx264", "libx265", "libvpx-vp9", "ffv1", "gif", "png"]).optional(),
     audioCodec: z.enum(["aac", "libopus", "flac", "pcm_s24le"]).optional(),
     crf: safeInteger.optional(),
     videoBitrate: z.string().optional(),
@@ -247,3 +256,6 @@ export const StudioProjectSchema = z.object({
   });
   if (!project.sequences.some((sequence) => sequence.id === project.activeSequenceId)) context.addIssue({ code: "custom", message: "activeSequenceId does not exist.", path: ["activeSequenceId"] });
 });
+
+export const AnimationNodeSchema = animationSchema.shape.nodes.element;
+export const AnimationOperationSchema = animationSchema.shape.operations.element;

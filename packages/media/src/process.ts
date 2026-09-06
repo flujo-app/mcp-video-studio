@@ -50,6 +50,7 @@ function stopProcess(child: ChildProcessWithoutNullStreams): void {
 }
 
 export async function runProcess(executable: string, args: string[], options: ProcessOptions = {}): Promise<ProcessResult> {
+  if(options.signal?.aborted)throw new StudioException("CANCELLED","Process was cancelled before starting.","runtime");
   if (!executable.trim()) throw new StudioException("INVALID_EXECUTABLE", "Executable cannot be empty.", "input");
   const started = Date.now();
   const max = options.maxOutputChars ?? 200_000;
@@ -63,6 +64,7 @@ export async function runProcess(executable: string, args: string[], options: Pr
     stdio: ["pipe", "pipe", "pipe"]
   });
 
+  child.stdin.on("error", () => undefined);
   let progress: Record<string, string> = {};
   let progressBuffer = "";
   child.stdout.setEncoding("utf8");
@@ -71,13 +73,13 @@ export async function runProcess(executable: string, args: string[], options: Pr
   child.stderr.on("data", (chunk: string) => {
     stderr.append(chunk);
     if (options.onProgress) {
-      progressBuffer += chunk;
+      progressBuffer = (progressBuffer + chunk).slice(-32768);
       const lines = progressBuffer.split(/\r?\n/);
       progressBuffer = lines.pop() ?? "";
       for (const line of lines) {
         const separator = line.indexOf("=");
         if (separator <= 0) continue;
-        progress[line.slice(0, separator)] = line.slice(separator + 1);
+        if(["out_time_us","out_time_ms","frame","fps","speed","progress"].includes(line.slice(0,separator)))progress[line.slice(0, separator)] = line.slice(separator + 1);
         if (line.startsWith("progress=")) {
           options.onProgress(progress);
           progress = {};
@@ -114,4 +116,28 @@ export async function runChecked(executable: string, args: string[], options: Pr
   const result = await runProcess(executable, args, options);
   if (result.exitCode !== 0) throw new StudioException("PROCESS_FAILED", `${executable} exited with ${result.exitCode}.`, "runtime", { executable, args, exitCode: result.exitCode, stderr: result.stderr, truncated: result.truncated });
   return result;
+}
+
+const scriptOptions = new Map<string, Promise<string>>();
+/** Select an installed capability; modern FFmpeg removed the legacy script option. */
+export function filterScriptOption(executable: string): Promise<string> {
+  let choice = scriptOptions.get(executable);
+  if (!choice) {
+    choice = runChecked(executable, ["-hide_banner", "-h", "full"], { timeoutMs: 10_000, maxOutputChars: 2_000_000 })
+      .then(result => {
+        const help = result.stdout + result.stderr;
+        if (!help.includes("-filter_complex")) throw new StudioException("FFMPEG_FILTER_SUPPORT", "Installed FFmpeg does not expose complex filter support.", "dependency");
+        return help.includes("-filter_complex_script") ? "-filter_complex_script" : "-/filter_complex";
+      }).catch(error => { scriptOptions.delete(executable); throw error; });
+    scriptOptions.set(executable, choice);
+  }
+  return choice;
+}
+
+const filterCapabilities=new Map<string,Promise<Set<string>>>();
+export async function requireFfmpegFilters(executable:string,names:string[]):Promise<void>{
+ let pending=filterCapabilities.get(executable);
+ if(!pending){pending=runChecked(executable,["-hide_banner","-filters"],{timeoutMs:10000,maxOutputChars:500000}).then(result=>new Set((result.stdout+"\n"+result.stderr).split(/\r?\n/).map(line=>line.trim().split(/\s+/)[1]??""))).catch(error=>{filterCapabilities.delete(executable);throw error;});filterCapabilities.set(executable,pending);}
+ const available=await pending,missing=names.filter(name=>!available.has(name));
+ if(missing.length)throw new StudioException("FFMPEG_CAPABILITY_MISSING","Installed FFmpeg lacks "+missing.join(", ")+". Install a full FFmpeg build; on macOS use brew install ffmpeg-full and select its bin directory with VIDEO_STUDIO_FFMPEG_PATH.","dependency",{missing});
 }

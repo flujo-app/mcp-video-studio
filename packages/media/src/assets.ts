@@ -1,29 +1,79 @@
 import { randomUUID } from "node:crypto";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
-import { type MediaAsset, type MutationResult, type ProjectDelta } from "@mcp-video-studio/contracts";
-import { copyFileAtomic, ProjectStore, sha256File, StudioException } from "@mcp-video-studio/core";
+import {
+  type MediaAsset,
+  type MutationResult,
+  type ProjectDelta,
+} from "@mcp-video-studio/contracts";
+import {
+  confinedPath,
+  copyFileAtomic,
+  ProjectStore,
+  sha256File,
+  StudioException,
+} from "@mcp-video-studio/core";
 import type { StudioConfig } from "./config.js";
 import { mediaKindFor, probeMedia } from "./probe.js";
 
-function emptyDelta(): ProjectDelta { return { sequences: [], tracks: [], clips: [], media: [], animations: [], generatedArtifacts: [] }; }
+function emptyDelta(): ProjectDelta {
+  return {
+    sequences: [],
+    tracks: [],
+    clips: [],
+    media: [],
+    animations: [],
+    generatedArtifacts: [],
+  };
+}
 
 export interface ImportedAsset {
   media: MediaAsset;
   deduplicated: boolean;
 }
 
-export async function importMedia(store: ProjectStore, filePath: string, storageMode: "managed" | "linked", expectedRevision: number, config: StudioConfig, signal?: AbortSignal): Promise<{ mutation: MutationResult; asset: ImportedAsset }> {
+export async function importMedia(
+  store: ProjectStore,
+  filePath: string,
+  storageMode: "managed" | "linked",
+  expectedRevision: number,
+  config: StudioConfig,
+  signal?: AbortSignal,
+): Promise<{ mutation: MutationResult; asset: ImportedAsset }> {
   const source = path.resolve(filePath);
   const info = await stat(source).catch(() => undefined);
-  if (!info?.isFile()) throw new StudioException("MEDIA_NOT_FOUND", `Media file not found: ${source}`, "input");
-  const [{ sha256, bytes }, probe] = await Promise.all([sha256File(source), probeMedia(source, config, signal)]);
+  if (!info?.isFile())
+    throw new StudioException(
+      "MEDIA_NOT_FOUND",
+      `Media file not found: ${source}`,
+      "input",
+    );
+  const [{ sha256, bytes }, probe] = await Promise.all([
+    sha256File(source, signal),
+    probeMedia(source, config, signal),
+  ]);
   const current = await store.read();
-  const existing = current.media.find((media) => media.storage.sha256 === sha256);
+  if (current.revision !== expectedRevision)
+    throw new StudioException(
+      "REVISION_CONFLICT",
+      "Project revision changed before media operation.",
+      "conflict",
+    );
+  if(mediaKindFor(source,probe)==="lut"&&storageMode!=="managed")throw new StudioException("LUT_STORAGE","Import color LUTs as managed assets so archives remain portable.","input");
+  const existing = current.media.find(
+    (media) => media.storage.sha256 === sha256,
+  );
   if (existing) {
     return {
-      mutation: { success: true, projectId: current.projectId, revision: current.revision, transactionId: `dedupe:${existing.id}`, changed: emptyDelta(), warnings: ["The asset already exists in this project."] },
-      asset: { media: existing, deduplicated: true }
+      mutation: {
+        success: true,
+        projectId: current.projectId,
+        revision: current.revision,
+        transactionId: `dedupe:${existing.id}`,
+        changed: emptyDelta(),
+        warnings: ["The asset already exists in this project."],
+      },
+      asset: { media: existing, deduplicated: true },
     };
   }
 
@@ -31,73 +81,240 @@ export async function importMedia(store: ProjectStore, filePath: string, storage
   const id = randomUUID();
   let storage: MediaAsset["storage"];
   if (storageMode === "managed") {
-    const relativePath = path.join("assets", sha256.slice(0, 2), sha256.slice(2, 4), `${sha256}${extension}`);
-    const target = path.join(store.root, relativePath);
+    const relativePath = path.posix.join(
+      "assets",
+      sha256.slice(0, 2),
+      sha256.slice(2, 4),
+      `${sha256}${extension}`,
+    );
+    const target = confinedPath(
+      store.root,
+      path.join(store.root, relativePath),
+    );
     await mkdir(path.dirname(target), { recursive: true });
-    await copyFileAtomic(source, target);
+    await copyFileAtomic(source, target, {
+      ...(signal ? { signal } : {}),
+      expected: { sha256, bytes },
+    });
     storage = { mode: "managed", sha256, relativePath, bytes };
   } else {
-    storage = { mode: "linked", path: source, sha256, bytes, mtimeMs: info.mtimeMs };
+    storage = {
+      mode: "linked",
+      path: source,
+      sha256,
+      bytes,
+      mtimeMs: info.mtimeMs,
+    };
   }
-  const media: MediaAsset = { id, name: path.basename(source), kind: mediaKindFor(source, probe), storage, probe, createdAt: new Date().toISOString() };
-  const changed = emptyDelta(); changed.media.push(id);
-  const mutation = await store.replace(expectedRevision, (project) => { project.media.push(media); }, changed);
+  const media: MediaAsset = {
+    id,
+    name: path.basename(source),
+    kind: mediaKindFor(source, probe),
+    storage,
+    probe,
+    createdAt: new Date().toISOString(),
+  };
+  const changed = emptyDelta();
+  changed.media.push(id);
+  const mutation = await store.replace(
+    expectedRevision,
+    (project) => {
+      project.media.push(media);
+    },
+    changed,
+  );
   return { mutation, asset: { media, deduplicated: false } };
 }
 
 export function mediaPath(store: ProjectStore, media: MediaAsset): string {
-  return media.storage.mode === "managed" ? path.join(store.root, media.storage.relativePath) : media.storage.path;
+  return media.storage.mode === "managed"
+    ? confinedPath(
+        store.root,
+        path.join(store.root, media.storage.relativePath),
+      )
+    : media.storage.path;
 }
 
-export async function relinkMedia(store: ProjectStore, mediaId: string, filePath: string, expectedRevision: number, config: StudioConfig, signal?: AbortSignal): Promise<{ mutation: MutationResult; media: MediaAsset }> {
+export async function relinkMedia(
+  store: ProjectStore,
+  mediaId: string,
+  filePath: string,
+  expectedRevision: number,
+  config: StudioConfig,
+  signal?: AbortSignal,
+): Promise<{ mutation: MutationResult; media: MediaAsset }> {
   const source = path.resolve(filePath);
   const info = await stat(source).catch(() => undefined);
-  if (!info?.isFile()) throw new StudioException("MEDIA_NOT_FOUND", `Media file not found: ${source}`, "input");
+  if (!info?.isFile())
+    throw new StudioException(
+      "MEDIA_NOT_FOUND",
+      `Media file not found: ${source}`,
+      "input",
+    );
   const current = await store.read();
+  if (current.revision !== expectedRevision)
+    throw new StudioException(
+      "REVISION_CONFLICT",
+      "Project revision changed before media operation.",
+      "conflict",
+    );
   const index = current.media.findIndex((media) => media.id === mediaId);
-  if (index < 0) throw new StudioException("MEDIA_NOT_FOUND", `Media not found: ${mediaId}`, "input");
-  const [{ sha256, bytes }, probe] = await Promise.all([sha256File(source), probeMedia(source, config, signal)]);
+  if (index < 0)
+    throw new StudioException(
+      "MEDIA_NOT_FOUND",
+      `Media not found: ${mediaId}`,
+      "input",
+    );
+  const [{ sha256, bytes }, probe] = await Promise.all([
+    sha256File(source, signal),
+    probeMedia(source, config, signal),
+  ]);
   const previous = current.media[index]!;
+  if(previous.kind==="lut"||mediaKindFor(source,probe)==="lut")throw new StudioException("LUT_RELINK","Import a replacement LUT as a managed asset, then select it in the effect stack.","input");
   const replacement: MediaAsset = {
     ...previous,
     name: path.basename(source),
     kind: mediaKindFor(source, probe),
-    storage: { mode: "linked", path: source, sha256, bytes, mtimeMs: info.mtimeMs },
+    storage: {
+      mode: "linked",
+      path: source,
+      sha256,
+      bytes,
+      mtimeMs: info.mtimeMs,
+    },
     probe,
-    offline: false
+    offline: false,
   };
-  const changed = emptyDelta(); changed.media.push(mediaId);
-  const mutation = await store.replace(expectedRevision, (project) => { project.media[index] = replacement; }, changed);
+  const changed = emptyDelta();
+  changed.media.push(mediaId);
+  const mutation = await store.replace(
+    expectedRevision,
+    (project) => {
+      project.media[index] = replacement;
+    },
+    changed,
+  );
   return { mutation, media: replacement };
 }
 
-export async function consolidateMedia(store: ProjectStore, mediaIds: string[] | undefined, expectedRevision: number): Promise<{ mutation: MutationResult; consolidated: string[] }> {
+export async function consolidateMedia(
+  store: ProjectStore,
+  mediaIds: string[] | undefined,
+  expectedRevision: number,
+  signal?: AbortSignal,
+  context: {
+    commit?: () => void;
+    progress?: (value: number, message: string) => Promise<void>;
+  } = {},
+): Promise<{ mutation: MutationResult; consolidated: string[] }> {
   const current = await store.read();
-  const selected = current.media.filter((media) => media.storage.mode === "linked" && (!mediaIds || mediaIds.includes(media.id)));
+  if (current.revision !== expectedRevision)
+    throw new StudioException(
+      "REVISION_CONFLICT",
+      "Project revision changed before media operation.",
+      "conflict",
+    );
+  const selected = current.media.filter(
+    (media) =>
+      media.storage.mode === "linked" &&
+      (!mediaIds || mediaIds.includes(media.id)),
+  );
   const replacements = new Map<string, MediaAsset>();
-  for (const media of selected) {
+  for (const [index, media] of selected.entries()) {
+    signal?.throwIfAborted();
+    await context.progress?.(
+      index / Math.max(1, selected.length),
+      "Verifying and copying " + media.name,
+    );
     const source = mediaPath(store, media);
     const extension = path.extname(source).toLowerCase() || ".bin";
-    const relativePath = path.join("assets", media.storage.sha256.slice(0, 2), media.storage.sha256.slice(2, 4), `${media.storage.sha256}${extension}`);
-    const target = path.join(store.root, relativePath);
+    const relativePath = path.posix.join(
+      "assets",
+      media.storage.sha256.slice(0, 2),
+      media.storage.sha256.slice(2, 4),
+      `${media.storage.sha256}${extension}`,
+    );
+    const target = confinedPath(
+      store.root,
+      path.join(store.root, relativePath),
+    );
     await mkdir(path.dirname(target), { recursive: true });
-    await copyFileAtomic(source, target);
-    replacements.set(media.id, { ...media, storage: { mode: "managed", sha256: media.storage.sha256, relativePath, bytes: media.storage.bytes } });
+    await copyFileAtomic(source, target, {
+      ...(signal ? { signal } : {}),
+      expected: { sha256: media.storage.sha256, bytes: media.storage.bytes },
+    });
+    replacements.set(media.id, {
+      ...media,
+      storage: {
+        mode: "managed",
+        sha256: media.storage.sha256,
+        relativePath,
+        bytes: media.storage.bytes,
+      },
+    });
   }
   if (replacements.size === 0) {
-    return { mutation: { success: true, projectId: current.projectId, revision: current.revision, transactionId: "consolidate:none", changed: emptyDelta(), warnings: ["No linked media matched."] }, consolidated: [] };
+    return {
+      mutation: {
+        success: true,
+        projectId: current.projectId,
+        revision: current.revision,
+        transactionId: "consolidate:none",
+        changed: emptyDelta(),
+        warnings: ["No linked media matched."],
+      },
+      consolidated: [],
+    };
   }
-  const changed = emptyDelta(); changed.media.push(...replacements.keys());
-  const mutation = await store.replace(expectedRevision, (project) => { project.media = project.media.map((media) => replacements.get(media.id) ?? media); }, changed);
+  signal?.throwIfAborted();
+  const changed = emptyDelta();
+  changed.media.push(...replacements.keys());
+  const mutation = await store.replace(
+    expectedRevision,
+    (project) => {
+      signal?.throwIfAborted();
+      context.commit?.();
+      project.media = project.media.map(
+        (media) => replacements.get(media.id) ?? media,
+      );
+    },
+    changed,
+  );
   return { mutation, consolidated: [...replacements.keys()] };
 }
 
-export async function inspectMedia(store: ProjectStore, mediaIds?: string[]): Promise<Array<Record<string, unknown>>> {
-  const project = await store.read();
-  return Promise.all(project.media.filter((media) => !mediaIds || mediaIds.includes(media.id)).map(async (media) => {
-    const resolvedPath = mediaPath(store, media);
-    const info = await stat(resolvedPath).catch(() => undefined);
-    const changed = media.storage.mode === "linked" && info ? Math.abs(info.mtimeMs - media.storage.mtimeMs) > 1 : false;
-    return { ...media, resolvedPath, available: Boolean(info?.isFile()), changedOnDisk: changed, actualBytes: info?.size ?? null };
-  }));
+export async function inspectMedia(
+  store: ProjectStore,
+  mediaIds?: string[],
+): Promise<Array<Record<string, unknown>>> {
+  const project = await store.read(),
+    results: Array<Record<string, unknown>> = [];
+  for (const media of project.media.filter(
+    (media) => !mediaIds || mediaIds.includes(media.id),
+  )) {
+    const resolvedPath = mediaPath(store, media),
+      info = await stat(resolvedPath).catch(() => undefined);
+    let actual: { sha256: string; bytes: number } | undefined,
+      inspectionError: string | undefined;
+    if (info?.isFile())
+      try {
+        actual = await sha256File(resolvedPath);
+      } catch (error) {
+        inspectionError =
+          error instanceof Error ? error.message : String(error);
+      }
+    results.push({
+      ...media,
+      resolvedPath,
+      available: Boolean(info?.isFile()),
+      changedOnDisk: actual
+        ? actual.sha256 !== media.storage.sha256 ||
+          actual.bytes !== media.storage.bytes
+        : Boolean(info?.isFile()),
+      actualBytes: actual?.bytes ?? info?.size ?? null,
+      ...(actual ? { actualSha256: actual.sha256 } : {}),
+      ...(inspectionError ? { inspectionError } : {}),
+    });
+  }
+  return results;
 }
