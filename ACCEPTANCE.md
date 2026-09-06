@@ -101,7 +101,7 @@ Status: in-progress.
 
 - Source-handle validation and shared clip trim/split/speed/effect rendering paths.
 
-Remaining: Exercise animation-specific trim/split/speed/transition pixel parity after transition completion.
+Verified locally by tests/animation-clips.integration.test.ts: split and trim preserve exact frames, faster/slower playback, effects and centered transitions match equivalent managed media. The regression exposed and fixed fractional-source-frame range boundaries; 24fps and 29.97fps sources now match whole rendering at fractional speeds. CI confirmation pending for this follow-up.
 
 ## Issue 3: A new MCP session can inspect a project and safely revise one generated region without regenerating or disturbing unrelated work.
 
@@ -204,3 +204,5 @@ Remaining: No remaining work for conflict/reapply acceptance.
 External acceptance remains explicit: unfamiliar-human usability benchmark and authenticated paid-provider generation have not been claimed.
 
 Animation checkpoint: full local gate passes 68 tests, packed modern/legacy MCP clients, persistence, EOF and browser checks. Explicit sample spans pass Linux/macOS CI for the preceding audio-only checkpoint; Windows jobs are pending.
+
+CI 34013282337 passed all six Windows/macOS/Linux Node22/24 jobs at head 7c6d0cd, including strict audio parity and the 30-minute mixed-media fixture.

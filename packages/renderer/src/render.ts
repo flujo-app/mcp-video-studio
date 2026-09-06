@@ -224,14 +224,18 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
     const rate = clip.playbackRate.numerator / clip.playbackRate.denominator;
     const startTick=Math.max(clip.startTick,pass.range?.startTick??clip.startTick);
     const finishTick=Math.min(clip.startTick+clip.durationTick,pass.range?.endTick??Number.MAX_SAFE_INTEGER);
-    const sourceStart = ticksToSeconds(clip.sourceInTick+Math.round((startTick-clip.startTick)*rate));
-    const sourceDuration = ticksToSeconds(Math.round((finishTick-startTick)*rate));
-    const start = ticksToSeconds(startTick);
+    const sourceFps=input.media?.probe.frameRate??project.settings.fps,sourceFrameSeconds=sourceFps.denominator/sourceFps.numerator;
+    const requestedSourceStart=ticksToSeconds(clip.sourceInTick+Math.round((startTick-clip.startTick)*rate));
+    // Keep the preceding source frame so slowed clips hold the same image across cache boundaries.
+    const sourceStart=Math.floor((requestedSourceStart+1e-9)/sourceFrameSeconds)*sourceFrameSeconds;
+    const sourceEnd=ticksToSeconds(clip.sourceInTick+Math.round((finishTick-clip.startTick)*rate))+sourceFrameSeconds;
+    const start = ticksToSeconds(clip.startTick);
     const transform = clipTransformFilters(clip, project.settings.raster);
     const filters = [
-      `trim=start=${sourceStart}:duration=${sourceDuration}`,
-      `setpts=(PTS-STARTPTS)/${rate}+${start}/TB`,
+      `trim=start=${sourceStart}:end=${sourceEnd}`,
+      `setpts=(PTS-${ticksToSeconds(clip.sourceInTick)}/TB)/${rate}+${start}/TB`,
       `fps=${fps}`,
+      "trim=start="+ticksToSeconds(startTick)+":end="+ticksToSeconds(finishTick),
       ...transform.filters,
       ...videoEffectFilters(clip.effects),
       ...fadeFilters(sequence, clip)
@@ -352,7 +356,7 @@ async function continuousAudio(project:StudioProject,sequence:Sequence,store:Pro
   clips:clips.map(({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})=>({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})),
   tracks:sequence.tracks.map(({id,type,muted,solo,gainDb,pan,effects})=>({id,type,muted,solo,gainDb,pan,effects})),
   automation:sequence.automation,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
-  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:11,animationRenderer:ANIMATION_RENDERER_VERSION});
+  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:12,animationRenderer:ANIMATION_RENDERER_VERSION});
  const cached=confinedPath(store.root,path.join(store.root,"cache","renders","audio-"+key+".wav"));
  let hit=false;try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
  if(!hit){
@@ -387,7 +391,7 @@ async function videoRanges(project:StudioProject,sequence:Sequence,store:Project
    settings:{raster:project.settings.raster,fps:project.settings.fps,background:project.settings.background,colorSpace:project.settings.colorSpace},
    media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),
    animations:project.animations.filter(animation=>animationIds.has(animation.id)),
-   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:11,animationRenderer:ANIMATION_RENDERER_VERSION
+   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:12,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cached=confinedPath(store.root,path.join(store.root,"cache","renders","video-"+key+".mkv"));
   let hit=false;
@@ -436,7 +440,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: mediaHashes.get(asset.id), offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
     output: { videoRangeFrames:options.videoRangeFrames??null, maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
-    renderer: 11,animationRenderer:ANIMATION_RENDERER_VERSION
+    renderer: 12,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cachePath = confinedPath(store.root,path.join(store.root,"cache","renders",renderKey+"."+preset.container));
   const durationTick = sequenceDuration(sequence);
