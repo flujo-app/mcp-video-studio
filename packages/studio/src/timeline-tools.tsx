@@ -1,3 +1,4 @@
+import {ticksPerSample,copyClipSelection,pasteClipSelection,type ClipClipboard} from "@mcp-video-studio/contracts";
 import React,{useEffect,useRef,useState} from "react";
 import {framesToTicks,ticksToFrames,secondsToTicks,type Clip,type ProjectCommand,type Sequence,type StudioProject,type AutomationLane} from "@mcp-video-studio/contracts";
 export function useModalFocus(active:boolean):void {
@@ -25,7 +26,7 @@ export function useModalFocus(active:boolean):void {
   return()=>{document.removeEventListener("keydown",key,true);for(const [item,inert] of restore)item.inert=inert;if(previous?.isConnected)previous.focus();};
  },[active]);
 }
-type Clipboard={projectId:string;clips:Clip[];automation:AutomationLane[]};
+type Clipboard=ClipClipboard&{projectId:string};
 export function SelectionTools({project,sequence,selectedIds,playhead,onSelect,onMutate,ripple}:{project:StudioProject|undefined;sequence:Sequence|undefined;selectedIds:string[];playhead:number;onSelect(ids:string[]):void;onMutate(commands:ProjectCommand[]):Promise<void>;ripple:boolean}){
  const clipboard=useRef<Clipboard|undefined>(undefined),[copied,setCopied]=useState(false),[rangeStart,setRangeStart]=useState(0),[rangeEnd,setRangeEnd]=useState(5),[markerLabel,setMarkerLabel]=useState("Review");
  const selection=()=> {
@@ -37,20 +38,13 @@ export function SelectionTools({project,sequence,selectedIds,playhead,onSelect,o
  const copy=()=>{
   if(!project||!sequence)return;
   const clips=selection();if(!clips.length)return;
-  clipboard.current={projectId:project.projectId,clips:structuredClone(clips),automation:structuredClone(sequence.automation.filter(lane=>clips.some(clip=>lane.target.startsWith("clip:"+clip.id+":"))))};setCopied(true);
+  clipboard.current={projectId:project.projectId,...copyClipSelection(sequence,selectedIds)};setCopied(true);
  };
  const paste=async(at=playhead)=>{
   const data=clipboard.current;if(!project||!sequence||!data||data.projectId!==project.projectId)return;
-  const aligned=framesToTicks(ticksToFrames(at,project.settings.fps,"round"),project.settings.fps),offset=aligned-Math.min(...data.clips.map(clip=>clip.startTick));
-  const ids=new Map(data.clips.map(clip=>[clip.id,crypto.randomUUID()])),groups=new Map<string,string>();
-  const relation=(kind:string,id:string)=>{const key=kind+id;let value=groups.get(key);if(!value){value=crypto.randomUUID();groups.set(key,value);}return value;};
-  const commands:ProjectCommand[]=data.clips.map(original=>{
-   const clip=structuredClone(original);clip.id=ids.get(original.id)!;clip.startTick+=offset;clip.name+=" copy";
-   if(clip.groupId)clip.groupId=relation("group",clip.groupId);if(clip.linkedGroupId)clip.linkedGroupId=relation("link",clip.linkedGroupId);
-   return{type:"clip.add",sequenceId:sequence.id,clip,mode:"overwrite"};
-  });
-  for(const lane of data.automation){const target=lane.target.split(":"),replacement=ids.get(target[1]!);if(replacement)commands.push({type:"automation.set",sequenceId:sequence.id,lane:{...structuredClone(lane),id:crypto.randomUUID(),target:"clip:"+replacement+":"+target.slice(2).join(":"),points:lane.points.map(point=>({...point,tick:Math.max(0,point.tick+offset)}))}});}
-  await onMutate(commands);onSelect([...ids.values()]);
+  const aligned=framesToTicks(ticksToFrames(at,project.settings.fps,"round"),project.settings.fps);
+  const {commands,clipIds}=pasteClipSelection(sequence.id,data,aligned,ticksPerSample(project.settings.sampleRate));
+  await onMutate(commands);onSelect(clipIds);
  };
  const duplicate=async()=>{const clips=selection();if(!clips.length)return;copy();await paste(Math.max(...clips.map(clip=>clip.startTick+clip.durationTick)));};
  const relate=(relation:"group"|"link",clear=false)=>{if(sequence&&selectedIds.length)void onMutate([{type:"clip.relate",sequenceId:sequence.id,clipIds:selection().map(clip=>clip.id),relation,relationshipId:clear?null:crypto.randomUUID()}]);};

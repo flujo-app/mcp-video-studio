@@ -4,3 +4,4 @@ export * from "./probe.js";
 export * from "./artifacts.js";
 export * from "./assets.js";
 export * from "./proxies.js";
+export * from "./timeline-tiles.js";

@@ -8,7 +8,7 @@ import { invokeFeature, featureSchemas, type FeatureName } from "./features.js";
 import { exportProjectArchive, importProjectArchive, inspectProjectArchive } from "./archive.js";
 import { hostAuthorities, httpOrigin, jsonBody, requestBoundary, tokenMatches, validateToken } from "./security.js";
 import { fileURLToPath } from "node:url";
-import { mediaPath } from "@mcp-video-studio/media";
+import { mediaPath, TimelineTiles, type TimelineTileKind } from "@mcp-video-studio/media";
 import { confinedPath, asStudioError } from "@mcp-video-studio/core";
 import type { ProjectCommand } from "@mcp-video-studio/contracts";
 import type { StudioRuntime } from "./runtime.js";
@@ -35,6 +35,7 @@ export interface Gateway {
 
 export async function startGateway(runtime: StudioRuntime, token: string): Promise<Gateway> {
   validateToken(token);
+  const timelineTiles=new TimelineTiles(runtime.config);
   let hosts = new Set<string>();
   let allowedOrigins = new Set<string>();
   const studioDir = path.join(path.dirname(fileURLToPath(import.meta.url)), "studio");
@@ -81,7 +82,7 @@ export async function startGateway(runtime: StudioRuntime, token: string): Promi
       if (req.method === "GET" && url.pathname === "/api/jobs") { json(res, 200, { success: true, jobs: runtime.jobs.list() }); return; }
       if (req.method === "GET" && url.pathname === "/api/providers") { json(res, 200, await runtime.getProviderStatus()); return; }
       if (req.method === "GET" && url.pathname === "/api/generated") { json(res, 200, await runtime.listGeneratedArtifacts(url.searchParams.get("projectPath") ?? "")); return; }
-      if (req.method === "GET" && url.pathname === "/media") { await serveMedia(runtime, url, req, res); return; }
+      if (req.method === "GET" && url.pathname === "/media") { await serveMedia(runtime, timelineTiles, url, req, res); return; }
       if (req.method === "GET" && url.pathname === "/preview") { await servePreview(runtime, url, req, res); return; }
 
       if (req.method === "POST") {
@@ -139,17 +140,22 @@ export async function startGateway(runtime: StudioRuntime, token: string): Promi
   allowedOrigins = new Set([origin, ...[...hostAuthorities(runtime.config.gatewayHost, address.port)].map(authority => new URL("http://" + authority).origin), ...(runtime.config.allowedOrigins ?? []).map(httpOrigin)]);
   return {
     origin, token,
-    close: async () => { unsubscribe(); for (const client of clients) client.end(); server.closeAllConnections(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
+    close: async () => { unsubscribe(); for (const client of clients) client.end(); server.closeAllConnections(); await timelineTiles.close(); await new Promise<void>((resolve, reject) => server.close((error) => error ? reject(error) : resolve())); }
   };
 }
 
-async function serveMedia(runtime: StudioRuntime, url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
+async function serveMedia(runtime: StudioRuntime, timelineTiles: TimelineTiles, url: URL, req: IncomingMessage, res: ServerResponse): Promise<void> {
   const store = runtime.store(url.searchParams.get("projectPath") ?? "");
   const project = await store.read();
   const mediaId = url.searchParams.get("mediaId") ?? "";
   const asset = project.media.find((candidate) => candidate.id === mediaId);
   if (!asset) { json(res, 404, { success: false, error: { code: "MEDIA_NOT_FOUND", message: `Media not found: ${mediaId}` } }); return; }
   const kind = url.searchParams.get("kind") ?? "source";
+  if(kind==="timeline-thumbnail"||kind==="timeline-waveform"){
+    const controller=new AbortController(),abort=()=>controller.abort();res.once("close",abort);
+    try{const tile=await timelineTiles.get(store,asset,{kind:kind as TimelineTileKind,spanSeconds:Number(url.searchParams.get("spanSeconds")),index:Number(url.searchParams.get("index"))},controller.signal);if(!res.destroyed)await serveFile(tile,"image/png",req,res,"private, max-age=3600");}
+    finally{res.removeListener("close",abort);}return;
+  }
   let filePath = mediaPath(store, asset);
   if (kind === "proxy") filePath = path.join(store.root, "proxies", mediaId, "preview.mp4");
   else if (kind === "thumbnail") {

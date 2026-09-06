@@ -9,3 +9,6 @@ export * from "./captions.js";
 export * from "./animation.js";
 
 export * from "./generation.js";
+
+export * from "./clipboard.js";
+export * from "./automation-timing.js";

@@ -1,3 +1,4 @@
+import {ticksPerSample,copyClipSelection,pasteClipSelection,type Sequence} from "@mcp-video-studio/contracts";
 import {listExportHistory,getExportHistory,queueExport} from './provenance.js';
 import {queueArchive,listArchiveJobs} from './archive-jobs.js';
 import { randomUUID } from "node:crypto";
@@ -194,27 +195,25 @@ export function createMcpServer(runtime: StudioRuntime, gateway: Gateway): McpSe
   }, async ({ projectPath, expectedRevision, sequenceId, clipId, patch }) => invoke(() => runtime.apply(projectPath, expectedRevision, [{ type: "clip.update", sequenceId, clipId, patch: patch as never }])));
 
   server.registerTool("duplicate_clips", {
-    description: "Duplicate clips with fresh IDs and an optional timeline offset.",
-    inputSchema: z.object({ ...projectRevision, sequenceId: z.string(), clipIds: z.array(z.string()).min(1), offsetTick: z.number().int().default(0) }), annotations: { destructiveHint: false, openWorldHint: false }
+    description: "Duplicate related clips, automation and transitions with fresh IDs. Omitted offset appends after the selection; an explicit offset can overwrite its destination.",
+    inputSchema: z.object({ ...projectRevision, sequenceId: z.string(), clipIds: z.array(z.string()).min(1), offsetTick: z.number().int().optional() }), annotations: { destructiveHint: true, openWorldHint: false }
   }, async ({ projectPath, expectedRevision, sequenceId, clipIds, offsetTick }) => invoke(async () => {
-    const snapshot = await runtime.getSequence(projectPath, sequenceId) as { sequence: { clips: Array<Record<string, unknown> & { id: string; startTick: number }> } };
-    const commands = clipIds.map((id) => {
-      const existing = snapshot.sequence.clips.find((clip) => clip.id === id);
-      if (!existing) throw new StudioException("CLIP_NOT_FOUND", `Clip not found: ${id}`, "input");
-      return { type: "clip.add" as const, sequenceId, clip: { ...structuredClone(existing), id: randomUUID(), startTick: existing.startTick + offsetTick } as never, mode: "overwrite" as const };
-    });
-    return runtime.apply(projectPath, expectedRevision, commands);
+    const snapshot=await runtime.getSequence(projectPath,sequenceId) as {sequence:Sequence};
+    const data=copyClipSelection(snapshot.sequence,clipIds),first=Math.min(...data.clips.map(clip=>clip.startTick));
+    const at=offsetTick===undefined?Math.max(...data.clips.map(clip=>clip.startTick+clip.durationTick)):first+offsetTick;
+    const {commands}=pasteClipSelection(sequenceId,data,at,ticksPerSample((await runtime.store(projectPath).read()).settings.sampleRate));
+    return runtime.apply(projectPath,expectedRevision,commands);
   }));
 
   server.registerTool("group_clips", {
-    description: "Assign clips to a shared editable group, or clear the group.",
+    description: "Group clips with a fresh ID when omitted; pass null to ungroup.",
     inputSchema: z.object({ ...projectRevision, sequenceId: z.string(), clipIds: z.array(z.string()).min(1), groupId: z.string().nullable().optional() }), annotations: { destructiveHint: true, openWorldHint: false }
-  }, async ({ projectPath, expectedRevision, sequenceId, clipIds, groupId }) => invoke(() => runtime.apply(projectPath, expectedRevision, clipIds.map((clipId) => ({ type: "clip.update", sequenceId, clipId, patch: { groupId: groupId ?? undefined } })) as ProjectCommand[])));
+  }, async ({ projectPath, expectedRevision, sequenceId, clipIds, groupId }) => invoke(() => runtime.apply(projectPath, expectedRevision, [{type:"clip.relate",sequenceId,clipIds,relation:"group",relationshipId:groupId===undefined?randomUUID():groupId}])));
 
   server.registerTool("link_clips", {
-    description: "Assign clips to a shared A/V link group, or clear the link.",
+    description: "Link clips with a fresh ID when omitted; pass null to unlink.",
     inputSchema: z.object({ ...projectRevision, sequenceId: z.string(), clipIds: z.array(z.string()).min(1), linkedGroupId: z.string().nullable().optional() }), annotations: { destructiveHint: true, openWorldHint: false }
-  }, async ({ projectPath, expectedRevision, sequenceId, clipIds, linkedGroupId }) => invoke(() => runtime.apply(projectPath, expectedRevision, clipIds.map((clipId) => ({ type: "clip.update", sequenceId, clipId, patch: { linkedGroupId: linkedGroupId ?? undefined } })) as ProjectCommand[])));
+  }, async ({ projectPath, expectedRevision, sequenceId, clipIds, linkedGroupId }) => invoke(() => runtime.apply(projectPath, expectedRevision, [{type:"clip.relate",sequenceId,clipIds,relation:"link",relationshipId:linkedGroupId===undefined?randomUUID():linkedGroupId}])));
 
   server.registerTool("add_transition", {
     description: "Add a typed transition between two clips.",

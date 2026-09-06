@@ -22,7 +22,8 @@
     "RENDER_CACHE.md",
     "AUDIO_ACCEPTANCE.md",
     "ARCHIVES.md",
-    "PRODUCTIONS.md"
+    "PRODUCTIONS.md",
+    "EDITING.md"
   ],
   "workspaces": [
     "packages/*"

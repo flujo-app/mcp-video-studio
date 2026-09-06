@@ -1,3 +1,5 @@
+import {isAudioAutomation,rippleAutomationPoints} from "@mcp-video-studio/contracts";
+import { linkedBoundaryEdit } from "./edit-boundaries.js";
 import { duckAudio } from "./audio-ducking.js";
 import { audioParameterRange } from "./audio-ranges.js";
 import { randomUUID } from "node:crypto";
@@ -116,8 +118,8 @@ export function expandAdvancedCommand(project: StudioProject, command: AdvancedP
     const mapTime = (tick: number) => tick < start ? tick : tick < end ? start : tick - amount;
     for (const marker of sequence.markers) commands.push({ type: "marker.update", sequenceId: sequence.id, markerId: marker.id, patch: { tick: mapTime(marker.tick), durationTick: mapTime(marker.tick + marker.durationTick) - mapTime(marker.tick) } });
     for (const lane of sequence.automation) {
-      const points = new Map(lane.points.map(point => [mapTime(point.tick), { ...point, tick: mapTime(point.tick) }]));
-      commands.push({ type: "automation.set", sequenceId: sequence.id, lane: { ...lane, points: [...points.values()] } });
+      const points=isAudioAutomation(lane.target)?rippleAutomationPoints(lane.points,end,-amount,ticksPerSample(project.settings.sampleRate)):[...new Map(lane.points.map(point=>[mapTime(point.tick),{...point,tick:mapTime(point.tick)}])).values()];
+      commands.push({type:"automation.set",sequenceId:sequence.id,lane:{...lane,points}});
     }
     return commands;
   }
@@ -130,27 +132,8 @@ export function expandAdvancedCommand(project: StudioProject, command: AdvancedP
       return { type: "clip.update", sequenceId: sequence.id, clipId: target.id, patch: { sourceInTick: target.sourceInTick + command.deltaTick } };
     });
   }
-  if (clip.groupId || clip.linkedGroupId) fail("Roll and slide currently require an ungrouped, unlinked clip.");
-  const before = sequence.clips.find(item => item.trackId === clip.trackId && finish(item) === clip.startTick);
-  const after = sequence.clips.find(item => item.trackId === clip.trackId && item.startTick === finish(clip));
-  const advance = (target: Clip, ticks: number) => Math.round(ticks * target.playbackRate.numerator / target.playbackRate.denominator);
-  if (command.type === "clip.roll") {
-    if (!after) fail("Roll requires an adjacent clip on the same track."); unlocked(sequence, after);
-    if(after.groupId||after.linkedGroupId)fail("Roll requires an ungrouped, unlinked adjacent clip.");
-    const delta = integer(command.tick) - finish(clip);
-    sourceHandles(project, clip, clip.sourceInTick, clip.durationTick + delta);
-    sourceHandles(project, after, after.sourceInTick + advance(after, delta), after.durationTick - delta);
-    return [{ type: "clip.update", sequenceId: sequence.id, clipId: clip.id, patch: { durationTick: clip.durationTick + delta } },
-      { type: "clip.trim", sequenceId: sequence.id, clipId: after.id, edge: "in", tick: command.tick, ripple: false }];
-  }
-  if (!before || !after) fail("Slide requires adjacent clips on both sides."); unlocked(sequence, before); unlocked(sequence, after);
-  if(before.groupId||before.linkedGroupId||after.groupId||after.linkedGroupId)fail("Slide requires ungrouped, unlinked adjacent clips.");
-  const delta = integer(command.deltaTick);
-  sourceHandles(project, before, before.sourceInTick, before.durationTick + delta);
-  sourceHandles(project, after, after.sourceInTick + advance(after, delta), after.durationTick - delta);
-  return [{ type: "clip.update", sequenceId: sequence.id, clipId: before.id, patch: { durationTick: before.durationTick + delta } },
-    { type: "clip.trim", sequenceId: sequence.id, clipId: after.id, edge: "in", tick: after.startTick + delta, ripple: false },
-    { type: "clip.move", sequenceId: sequence.id, clipIds: [clip.id], targetTrackId: clip.trackId, startTick: clip.startTick + delta, ripple: false }];
+  const delta = command.type === "clip.roll" ? integer(command.tick) - finish(clip) : integer(command.deltaTick);
+  return linkedBoundaryEdit(project,sequence,clip,relatedClipIds(sequence,[clip.id]),command.type,delta,ids=>relatedClipIds(sequence,ids));
 }
 
 export const ANIMATION_PRESETS = ["title", "lower-third", "callout", "logo-reveal", "bar-chart", "diagram"] as const;

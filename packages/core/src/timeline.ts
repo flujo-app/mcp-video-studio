@@ -1,3 +1,4 @@
+import {isAudioAutomation,shiftAutomationPoints,rippleAutomationPoints} from "@mcp-video-studio/contracts";
 import { randomUUID } from "node:crypto";
 import type { Clip, Sequence } from "@mcp-video-studio/contracts";
 import { StudioException } from "./errors.js";
@@ -8,9 +9,9 @@ export function requireUnlocked(sequence: Sequence, trackId: string): void {
   const track = sequence.tracks.find(item => item.id === trackId);
   if (!track || track.locked) throw new StudioException("TRACK_LOCKED", "Unlock every affected track before editing.", "input", { trackId });
 }
-export function shiftClipAutomation(sequence: Sequence, clipId: string, amount: number): void {
+export function shiftClipAutomation(sequence: Sequence, clipId: string, amount: number, sampleTick=1): void {
   for (const lane of sequence.automation.filter(item => item.target.startsWith("clip:" + clipId + ":"))) {
-    lane.points = lane.points.map(point => ({ ...point, tick: Math.max(0, point.tick + amount) }));
+    lane.points = shiftAutomationPoints(lane.points,amount,isAudioAutomation(lane.target)?sampleTick:1);
   }
 }
 export function splitClipAt(sequence: Sequence, clip: Clip, tick: number, rightId: string = randomUUID()): Clip {
@@ -35,7 +36,7 @@ export function splitClipAt(sequence: Sequence, clip: Clip, tick: number, rightI
   return right;
 }
 /** Insert positive time or remove an empty interval ending at tick. All checks run on a transaction clone. */
-export function rippleTimeline(sequence: Sequence, tick: number, amount: number, excluded: Set<string>, trackIds?: Set<string>): void {
+export function rippleTimeline(sequence: Sequence, tick: number, amount: number, excluded: Set<string>, trackIds?: Set<string>, sampleTick=1): void {
   if (amount === 0) return;
   if (!Number.isSafeInteger(tick) || !Number.isSafeInteger(amount) || tick < 0 || tick + amount < 0) fail("Ripple times must stay on the nonnegative integer timeline.");
   const affects = (trackId: string) => !trackIds || trackIds.has(trackId);
@@ -77,8 +78,8 @@ export function rippleTimeline(sequence: Sequence, tick: number, amount: number,
     if(target[0]==="clip"&&excluded.has(target[1]!))continue;
     const owner = target[0] === "clip" ? sequence.clips.find(clip => clip.id === target[1])?.trackId : target[0] === "track" ? target[1] : undefined;
     if (trackIds && (!owner || !affects(owner))) continue;
-    const points = new Map(lane.points.map(point => [mapTime(point.tick), { ...point, tick: mapTime(point.tick) }]));
-    lane.points = [...points.values()];
+    if(isAudioAutomation(lane.target))lane.points=rippleAutomationPoints(lane.points,tick,amount,sampleTick);
+    else{const points=new Map(lane.points.map(point=>[mapTime(point.tick),{...point,tick:mapTime(point.tick)}]));lane.points=[...points.values()];}
   }
   if (!trackIds) for (const marker of sequence.markers) {
     const finish = mapTime(marker.tick + marker.durationTick);

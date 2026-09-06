@@ -1,7 +1,7 @@
 import { activateGenerated } from "./generation.js";
 import { randomUUID } from "node:crypto";
 import type { Clip, ProjectCommand, ProjectDelta, Sequence, StudioProject, Track } from "@mcp-video-studio/contracts";
-import { rational } from "@mcp-video-studio/contracts";
+import { rational,ticksPerSample } from "@mcp-video-studio/contracts";
 import { rippleTimeline, shiftClipAutomation, splitClipAt, cleanupClipReferences } from "./timeline.js";
 import { StudioException } from "./errors.js";
 import { isAdvancedCommand, expandAdvancedCommand, relatedClipIds } from "./advanced.js";
@@ -48,36 +48,25 @@ function addUnique(values: string[], value: string): void {
 
 
 function overwriteRange(sequence: Sequence, incoming: Clip): string[] {
-  const removed: string[] = [];
-  const start = incoming.startTick;
-  const finish = end(incoming);
-  const replacements: Clip[] = [];
-  for (const existing of sequence.clips) {
-    if (existing.trackId !== incoming.trackId || existing.id === incoming.id || end(existing) <= start || existing.startTick >= finish) continue;
-    const existingEnd = end(existing);
-    if (existing.startTick < start && existingEnd > finish) {
-      const right: Clip = structuredClone(existing);
-      right.id = randomUUID();
-      right.startTick = finish;
-      right.durationTick = existingEnd - finish;
-      right.sourceInTick += sourceAdvance(existing, finish - existing.startTick);
-      existing.durationTick = start - existing.startTick;
-      replacements.push(right);
-    } else if (existing.startTick < start) {
-      existing.durationTick = start - existing.startTick;
-    } else if (existingEnd > finish) {
-      const advance = finish - existing.startTick;
-      existing.startTick = finish;
-      existing.durationTick = existingEnd - finish;
-      existing.sourceInTick += sourceAdvance(existing, advance);
-    } else {
-      removed.push(existing.id);
+  const start=incoming.startTick,finish=end(incoming);
+  const direct=sequence.clips.filter(clip=>clip.trackId===incoming.trackId&&clip.id!==incoming.id&&end(clip)>start&&clip.startTick<finish);
+  const affected=relatedClipIds(sequence,direct.map(clip=>clip.id)).map(id=>clipById(sequence,id)).filter(clip=>clip.id!==incoming.id&&end(clip)>start&&clip.startTick<finish);
+  const touched=new Set(affected.map(clip=>clip.id)),removed=new Set<string>(),groups=new Map<string,string>(),links=new Map<string,string>();
+  const fresh=(map:Map<string,string>,id:string)=>{let value=map.get(id);if(!value){value=randomUUID();map.set(id,value);}return value;};
+  for(const clip of affected){
+    assertUnlocked(sequence,clip.trackId);
+    let middle=clip;
+    if(start>clip.startTick)middle=splitClipAt(sequence,clip,start);
+    if(finish<end(middle)){
+      const right=splitClipAt(sequence,middle,finish);touched.add(right.id);
+      if(right.groupId)right.groupId=fresh(groups,right.groupId);
+      if(right.linkedGroupId)right.linkedGroupId=fresh(links,right.linkedGroupId);
     }
+    removed.add(middle.id);
   }
-  cleanupClipReferences(sequence,new Set(removed));
-  sequence.clips = sequence.clips.filter((clip) => !removed.includes(clip.id));
-  sequence.clips.push(...replacements);
-  return removed;
+  cleanupClipReferences(sequence,removed);
+  sequence.clips=sequence.clips.filter(clip=>!removed.has(clip.id));
+  return [...new Set([...touched,...removed])];
 }
 
 function sortSequence(sequence: Sequence): void {
@@ -186,8 +175,8 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       if (sequence.clips.some((clip) => clip.id === command.clip.id)) throw new StudioException("DUPLICATE_ID", `Clip id already exists: ${command.clip.id}`, "input");
       const clip = structuredClone(command.clip);
       clip.playbackRate = rational(clip.playbackRate.numerator, clip.playbackRate.denominator);
-      if (command.mode === "insert") rippleTimeline(sequence, clip.startTick, clip.durationTick, new Set(), new Set([clip.trackId]));
-      else if (command.mode === "ripple") rippleTimeline(sequence, clip.startTick, clip.durationTick, new Set());
+      if (command.mode === "insert") rippleTimeline(sequence, clip.startTick, clip.durationTick, new Set(), new Set([clip.trackId]),ticksPerSample(next.settings.sampleRate));
+      else if (command.mode === "ripple") rippleTimeline(sequence, clip.startTick, clip.durationTick, new Set(),undefined,ticksPerSample(next.settings.sampleRate));
       else overwriteRange(sequence, clip).forEach((id) => addUnique(changed.clips, id));
       sequence.clips.push(clip);
       addUnique(changed.clips, clip.id);
@@ -203,12 +192,12 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       if (command.ripple) {
         const finish = Math.max(...selected.map(end)), span = finish - base;
         if (command.startTick > base && command.startTick < finish) throw new StudioException("RIPPLE_BOUNDARY", "Ripple destination cannot be inside the moving selection.", "input");
-        rippleTimeline(sequence, finish, -span, selectedIds);
-        rippleTimeline(sequence, command.startTick, span, selectedIds);
+        rippleTimeline(sequence, finish, -span, selectedIds,undefined,ticksPerSample(next.settings.sampleRate));
+        rippleTimeline(sequence, command.startTick, span, selectedIds,undefined,ticksPerSample(next.settings.sampleRate));
       }
       for (const clip of selected) {
         clip.startTick += deltaTick;
-        shiftClipAutomation(sequence, clip.id, deltaTick);
+        shiftClipAutomation(sequence, clip.id, deltaTick,ticksPerSample(next.settings.sampleRate));
         if (clip.trackId === sourceTrack) clip.trackId = command.targetTrackId;
         if (clip.startTick < 0) throw new StudioException("NEGATIVE_TIME", "A moved clip would start before zero.", "input");
         addUnique(changed.clips, clip.id);
@@ -232,10 +221,10 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       }
       if (command.ripple) {
         if (command.edge === "in") {
-          for(const clip of selected)shiftClipAutomation(sequence,clip.id,-amount);
+          for(const clip of selected)shiftClipAutomation(sequence,clip.id,-amount,ticksPerSample(next.settings.sampleRate));
           // Keep the trimmed source at its original timeline start; close/open its removed head.
-          rippleTimeline(sequence, oldBoundary + Math.max(0,amount), -amount, new Set(selected.map(clip=>clip.id)));
-        } else rippleTimeline(sequence, oldBoundary, amount, new Set(selected.map(clip=>clip.id)));
+          rippleTimeline(sequence, oldBoundary + Math.max(0,amount), -amount, new Set(selected.map(clip=>clip.id)),undefined,ticksPerSample(next.settings.sampleRate));
+        } else rippleTimeline(sequence, oldBoundary, amount, new Set(selected.map(clip=>clip.id)),undefined,ticksPerSample(next.settings.sampleRate));
       }
     } else if (command.type === "clip.split") {
       const anchor = clipById(sequence,command.clipId);
@@ -266,7 +255,7 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       if (command.ripple && selected.length > 0) {
         const start = Math.min(...selected.map((clip) => clip.startTick));
         const finish = Math.max(...selected.map(end));
-        rippleTimeline(sequence, finish, start - finish, new Set());
+        rippleTimeline(sequence, finish, start - finish, new Set(),undefined,ticksPerSample(next.settings.sampleRate));
       }
       selected.forEach((clip) => addUnique(changed.clips, clip.id));
     } else if (command.type === "clip.update") {
