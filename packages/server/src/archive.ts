@@ -1,0 +1,77 @@
+import { createReadStream } from "node:fs";
+import { lstat,mkdir,open,rename,rm,stat,statfs } from "node:fs/promises";
+import path from "node:path";import {createHash,randomUUID} from "node:crypto";
+import { ProjectStore,confinedPath,sha256File,validateProject,writeJson,StudioException } from "@mcp-video-studio/core";
+import { mediaPath } from "@mcp-video-studio/media";
+import type { StudioProject } from "@mcp-video-studio/contracts";
+const MAGIC=Buffer.from("MCPSTUDIO001\n");
+const MAX_BYTES=20*1024*1024*1024,MAX_MANIFEST=16*1024*1024;
+interface Entry{path:string;bytes:number;sha256:string}
+interface Manifest{format:"mcp-video-studio-archive";version:1;project:StudioProject;files:Entry[]}
+function samePath(a:string,b:string){return process.platform==="win32"?path.resolve(a).toLowerCase()===path.resolve(b).toLowerCase():path.resolve(a)===path.resolve(b);}
+function fail(message:string):never{throw new StudioException("INVALID_ARCHIVE",message,"input");}
+function safeEntry(entry:Entry):void{if(!entry.path.startsWith("assets/")||entry.path.includes("\\")||entry.path.includes(":")||entry.path.split("/").some(s=>!s||s==="."||s==="..")||!Number.isSafeInteger(entry.bytes)||entry.bytes<0||!/^[a-f0-9]{64}$/.test(entry.sha256))fail("Archive contains an invalid media entry.");}
+async function diskAdmission(directory:string,bytes:number){const disk=await statfs(directory);if(bytes+64*1024*1024>disk.bavail*disk.bsize)throw new StudioException("DISK_CAPACITY","Insufficient free space for atomic archive publication.","runtime");}
+export async function exportProjectArchive(projectPath:string,outputPath:string,expectedRevision:number):Promise<Record<string,unknown>>{
+ const store=new ProjectStore(projectPath),project=await store.read();
+ if(project.revision!==expectedRevision)throw new StudioException("REVISION_CONFLICT","Project revision changed before archiving.","conflict");
+ const sources=new Map<string,{entry:Entry;source:string}>();
+ for(const media of project.media){
+  const source=mediaPath(store,media),actual=await sha256File(source);
+  if(actual.sha256!==media.storage.sha256)fail("A media source changed. Relink it before archiving.");
+  const extension=path.extname(source).toLowerCase().replace(/[^a-z0-9.]/g,"")||".bin",relative="assets/"+actual.sha256+extension;
+  const entry={path:relative,bytes:actual.bytes,sha256:actual.sha256};safeEntry(entry);sources.set(relative,{entry,source});
+  media.storage={mode:"managed",relativePath:relative,...actual};
+ }
+ const files=[...sources.values()].sort((a,b)=>a.entry.path.localeCompare(b.entry.path)),manifest:Manifest={format:"mcp-video-studio-archive",version:1,project:validateProject(project),files:files.map(f=>f.entry)};
+ const encoded=Buffer.from(JSON.stringify(manifest));
+ const total=files.reduce((sum,f)=>sum+f.entry.bytes,0);
+ if(total>MAX_BYTES||encoded.length>MAX_MANIFEST||files.length>10000)fail("Archive exceeds the 20 GiB / 10000 media entry limits.");
+ const output=path.resolve(outputPath);await mkdir(path.dirname(output),{recursive:true});await diskAdmission(path.dirname(output),total+encoded.length);
+ // Never replace an input media file or the canonical project with an archive.
+ if(samePath(output,path.join(store.root,"project.json"))||files.some(f=>samePath(f.source,output)))fail("Archive output cannot replace a project or media source.");
+ const temporary=path.join(path.dirname(output),"."+path.basename(output)+"."+randomUUID()+".tmp");
+ const handle=await open(temporary,"wx");
+ try{
+  const length=Buffer.alloc(4);length.writeUInt32BE(encoded.length);
+  await handle.writeFile(Buffer.concat([MAGIC,length,encoded]));
+  for(const file of files){const hash=createHash("sha256");let bytes=0;for await(const chunk of createReadStream(file.source)){bytes+=chunk.length;if(bytes>file.entry.bytes)fail("Media changed while archiving.");hash.update(chunk);await handle.writeFile(chunk);}if(bytes!==file.entry.bytes||hash.digest("hex")!==file.entry.sha256)fail("Media changed while archiving.");}
+  await handle.sync();await handle.close();await rename(temporary,output);
+  return{success:true,outputPath:output,projectId:project.projectId,revision:project.revision,mediaCount:files.length,...await sha256File(output)};
+ }finally{await handle.close().catch(()=>undefined);await rm(temporary,{force:true}).catch(()=>undefined);}
+}
+async function readExact(handle:Awaited<ReturnType<typeof open>>,bytes:number):Promise<Buffer>{const result=Buffer.alloc(bytes);let offset=0;while(offset<bytes){const read=await handle.read(result,offset,bytes-offset,null);if(!read.bytesRead)fail("Archive ended unexpectedly.");offset+=read.bytesRead;}return result;}
+export async function inspectProjectArchive(filePath:string):Promise<Record<string,unknown>>{
+ const handle=await open(path.resolve(filePath),"r");try{const manifest=await readManifest(handle);return{success:true,format:manifest.format,version:manifest.version,projectName:manifest.project.name,projectId:manifest.project.projectId,revision:manifest.project.revision,mediaCount:manifest.files.length,totalMediaBytes:manifest.files.reduce((n,f)=>n+f.bytes,0),migration:{sourceSchemaVersion:1,targetSchemaVersion:1,changes:[],history:"Archive imports start a fresh undo history."}};}finally{await handle.close();}
+}
+async function readManifest(handle:Awaited<ReturnType<typeof open>>):Promise<Manifest>{
+ const prefix=await readExact(handle,MAGIC.length+4);if(!prefix.subarray(0,MAGIC.length).equals(MAGIC))fail("Unsupported archive signature.");
+ const size=prefix.readUInt32BE(MAGIC.length);if(size>MAX_MANIFEST)fail("Archive manifest exceeds its byte limit.");
+ const raw=JSON.parse((await readExact(handle,size)).toString("utf8")) as Manifest;
+ if(raw.format!=="mcp-video-studio-archive"||raw.version!==1||!Array.isArray(raw.files)||raw.files.length>10000)fail("Unsupported archive format/version.");
+ const project=validateProject(raw.project);const paths=new Set<string>();let total=0;
+ for(const entry of raw.files){safeEntry(entry);const key=entry.path.toLowerCase();if(paths.has(key))fail("Duplicate archive path.");paths.add(key);total+=entry.bytes;if(total>MAX_BYTES)fail("Archive exceeds 20 GiB.");}
+ for(const media of project.media){if(media.storage.mode!=="managed")fail("Archives cannot reference external media.");const storage=media.storage,entry=raw.files.find(f=>f.path===storage.relativePath);if(!entry||entry.sha256!==storage.sha256||entry.bytes!==storage.bytes)fail("Archive media manifest does not match its project.");}
+ return{...raw,project};
+}
+export async function importProjectArchive(filePath:string,destinationPath:string):Promise<Record<string,unknown>>{
+ const destination=path.resolve(destinationPath);
+ if(await lstat(destination).catch(()=>undefined))fail("Choose a destination that does not already exist.");
+ await mkdir(path.dirname(destination),{recursive:true});
+ const handle=await open(path.resolve(filePath),"r"),staging=path.join(path.dirname(destination),".studio-import-"+randomUUID());
+ try{
+  const manifest=await readManifest(handle);await diskAdmission(path.dirname(destination),manifest.files.reduce((n,f)=>n+f.bytes,0)+MAX_MANIFEST);
+  await mkdir(staging);
+  for(const entry of manifest.files){
+   const output=confinedPath(staging,path.join(staging,entry.path));await mkdir(path.dirname(output),{recursive:true});const writer=await open(output,"wx");const hash=createHash("sha256");let remaining=entry.bytes;
+   try{while(remaining){const bytes=await readExact(handle,Math.min(65536,remaining));remaining-=bytes.length;hash.update(bytes);await writer.writeFile(bytes);}await writer.sync();}finally{await writer.close();}
+   if(hash.digest("hex")!==entry.sha256)fail("Archive media checksum failed.");
+  }
+  const tail=Buffer.alloc(1);if((await handle.read(tail,0,1,null)).bytesRead)fail("Archive contains unexpected trailing data.");
+  for(const name of ["assets","fonts","proxies","cache","history/transactions","jobs","exports"])await mkdir(path.join(staging,name),{recursive:true});
+  await writeJson(path.join(staging,"project.json"),{...manifest.project,_history:{past:[],future:[]}});
+  if(await lstat(destination).catch(()=>undefined))fail("Archive destination appeared during import.");
+  await rename(staging,destination);
+  return{success:true,projectPath:destination,project:manifest.project,mediaCount:manifest.files.length};
+ }finally{await handle.close();await rm(staging,{recursive:true,force:true}).catch(()=>undefined);}
+}

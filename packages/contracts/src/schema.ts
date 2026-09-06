@@ -3,7 +3,7 @@ import { TICKS_PER_SECOND } from "./time.js";
 
 const safeInteger = z.number().int().safe();
 const positiveTick = safeInteger.positive();
-const id = z.string().min(1).max(200);
+const id = z.string().regex(/^[A-Za-z0-9][A-Za-z0-9._-]{0,199}$/);
 const rationalSchema = z.object({
   numerator: safeInteger,
   denominator: safeInteger.refine((value) => value !== 0, "Denominator cannot be zero.")
@@ -101,7 +101,7 @@ const sequenceSchema = z.object({
   automation: z.array(z.object({
     id,
     sequenceId: id,
-    target: id,
+    target: z.string().min(1).max(500),
     enabled: z.boolean(),
     points: z.array(z.object({ tick: safeInteger.nonnegative(), value: z.number().finite(), curve: z.enum(["hold", "linear", "easeIn", "easeOut", "easeInOut", "easeOutExpo", "overshoot"]) }))
   })),
@@ -113,10 +113,10 @@ const animationSchema = z.object({
   id,
   name: z.string().min(1).max(200),
   durationTick: positiveTick,
-  canvas: z.object({ width: safeInteger.positive(), height: safeInteger.positive(), background: z.string() }),
+  canvas: z.object({ width: safeInteger.positive().max(4096), height: safeInteger.positive().max(4096), background: z.string() }),
   seed: safeInteger,
   mode: z.enum(["declarative", "html"]),
-  html: z.string().optional(),
+  html: z.string().max(2_000_000).optional(),
   nodes: z.array(z.object({ id, parentId: id.optional(), type: z.enum(["group", "text", "rect", "ellipse", "line", "path", "image", "video", "camera"]), name: z.string(), properties: z.record(z.string(), z.unknown()), transform: transformSchema })),
   operations: z.array(z.object({ id, type: z.enum(["create", "write", "fade", "transform", "moveAlongPath", "rotate", "scale", "wait"]), targetId: id, startTick: safeInteger.nonnegative(), durationTick: safeInteger.nonnegative(), easing: z.enum(["hold", "linear", "easeIn", "easeOut", "easeInOut", "easeOutExpo", "overshoot"]), parameters: z.record(z.string(), z.unknown()) })),
   htmlAssetId: id.optional()
@@ -180,7 +180,7 @@ export const StudioProjectSchema = z.object({
     kind: z.enum(["video", "audio", "image", "font", "subtitle", "animation"]),
     mimeType: z.string().optional(),
     storage: z.discriminatedUnion("mode", [
-      z.object({ mode: z.literal("managed"), sha256: z.string().regex(/^[a-f0-9]{64}$/), relativePath: z.string().min(1), bytes: safeInteger.nonnegative() }),
+      z.object({ mode: z.literal("managed"), sha256: z.string().regex(/^[a-f0-9]{64}$/), relativePath: z.string().min(1).max(4096).refine(value => !value.includes("\\") && !value.includes(":") && !value.startsWith("/") && value.split("/").every(segment => segment !== ".." && segment !== "." && segment !== ""), "Managed media paths must be portable relative paths."), bytes: safeInteger.nonnegative() }),
       z.object({ mode: z.literal("linked"), path: z.string().min(1), sha256: z.string().regex(/^[a-f0-9]{64}$/), bytes: safeInteger.nonnegative(), mtimeMs: z.number().nonnegative() })
     ]),
     probe: z.object({
@@ -247,3 +247,6 @@ export const StudioProjectSchema = z.object({
   });
   if (!project.sequences.some((sequence) => sequence.id === project.activeSequenceId)) context.addIssue({ code: "custom", message: "activeSequenceId does not exist.", path: ["activeSequenceId"] });
 });
+
+export const AnimationNodeSchema = animationSchema.shape.nodes.element;
+export const AnimationOperationSchema = animationSchema.shape.operations.element;

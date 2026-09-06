@@ -39,7 +39,7 @@ The implementation sequence and current gaps are in [ROADMAP.md](./ROADMAP.md). 
 
 ## Requirements
 
-- Node.js 20 or newer
+- Node.js 22 or newer
 - FFmpeg and ffprobe available on `PATH`, or configured with environment variables
 - Chromium for animation rendering (`npm run runtime:install` in a source checkout)
 
@@ -56,11 +56,12 @@ npm run check
 npm start
 ```
 
-`npm start` uses stdio for MCP. It writes MCP protocol data only to stdout and prints the authenticated human-editor URL to stderr.
+`npm start` uses stdio for MCP. It writes MCP protocol data only to stdout and prints the editor origin to stderr. Use the open_studio tool to obtain its separate access link.
 
 Run the standalone Streamable HTTP endpoint instead:
 
 ```powershell
+$env:VIDEO_STUDIO_MCP_TOKEN = "<32-or-more-URL-safe-random-characters>"
 npm run serve
 ```
 
@@ -209,3 +210,7 @@ Run `npm run release:check` to validate the release helper without publishing.
 ## License
 
 MIT
+
+## Unreleased 2026 remediation
+
+See [REMEDIATION.md](./REMEDIATION.md) for SDK 2 modern/legacy compatibility, required HTTP authentication, new editor workflows, archive format, tests and remaining pre-v1 acceptance work. No new npm release is implied by this branch.

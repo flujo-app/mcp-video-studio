@@ -1,4 +1,5 @@
-import { readFile } from "node:fs/promises";
+import { readFile, stat } from "node:fs/promises";
+import { providerFetch } from "./provider-http.js";
 import path from "node:path";
 import type { AnimationDocument, GenerationRequest, Rational } from "@mcp-video-studio/contracts";
 import { StudioException } from "@mcp-video-studio/core";
@@ -33,8 +34,8 @@ function headers(apiKey: string | undefined, kind: "bearer" | "elevenlabs"): Rec
 }
 
 async function providerError(response: Response, provider: string): Promise<never> {
-  const detail = (await response.text().catch(() => "")).slice(0, 8_000);
-  throw new StudioException("PROVIDER_REQUEST_FAILED", `${provider} returned HTTP ${response.status}.`, response.status === 401 || response.status === 403 ? "policy" : "runtime", { provider, status: response.status, detail });
+  await response.body?.cancel().catch(() => undefined);
+  throw new StudioException("PROVIDER_REQUEST_FAILED", `${provider} returned HTTP ${response.status}.`, response.status === 401 || response.status === 403 ? "policy" : "runtime", { provider, status: response.status, retryable: response.status === 429 || response.status >= 500 });
 }
 
 function requireCredential(apiKey: string | undefined, provider: string, baseUrl: string): void {
@@ -72,6 +73,8 @@ function parseJsonObject(value: string): unknown {
 
 export class GenerationProviders {
   constructor(readonly config: StudioConfig) {}
+  private fetch(url:string,init:RequestInit):Promise<Response>{return providerFetch(url,init,[this.config.providers.openaiAudio.apiKey??"",this.config.providers.elevenLabs.apiKey??"",this.config.providers.language.apiKey??""]);}
+
 
   async synthesizeSpeech(request: GenerationRequest, signal?: AbortSignal): Promise<BinaryGenerationResult> {
     if (!request.text?.trim()) throw new StudioException("NARRATION_TEXT_REQUIRED", "Narration generation requires text.", "input");
@@ -81,7 +84,7 @@ export class GenerationProviders {
       const voiceId = request.voiceId || provider.voiceId;
       if (!voiceId) throw new StudioException("VOICE_REQUIRED", "Configure VIDEO_STUDIO_ELEVENLABS_VOICE_ID or provide voiceId.", "input");
       const format = request.outputFormat || "mp3_44100_128";
-      const response = await fetch(`${provider.baseUrl}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=${encodeURIComponent(format)}`, {
+      const response = await this.fetch(`${provider.baseUrl}/text-to-speech/${encodeURIComponent(voiceId)}?output_format=${encodeURIComponent(format)}`, {
         method: "POST", signal: signal ?? null,
         headers: { ...headers(provider.apiKey, "elevenlabs"), "content-type": "application/json" },
         body: JSON.stringify({ text: request.text, model_id: request.model || provider.speechModel, ...(request.language ? { language_code: request.language } : {}), ...(request.seed !== undefined ? { seed: request.seed } : {}), ...(request.parameters ?? {}) })
@@ -93,7 +96,7 @@ export class GenerationProviders {
     const provider = this.config.providers.openaiAudio;
     requireCredential(provider.apiKey, "OpenAI audio", provider.baseUrl);
     const format = request.outputFormat || "mp3";
-    const response = await fetch(`${provider.baseUrl}/audio/speech`, {
+    const response = await this.fetch(`${provider.baseUrl}/audio/speech`, {
       method: "POST", signal: signal ?? null,
       headers: { ...headers(provider.apiKey, "bearer"), "content-type": "application/json" },
       body: JSON.stringify({ model: request.model || provider.speechModel, voice: request.voiceId || provider.voice, input: request.text, response_format: format, ...(request.parameters ?? {}) })
@@ -109,8 +112,9 @@ export class GenerationProviders {
     const provider = this.config.providers.elevenLabs;
     requireCredential(provider.apiKey, "ElevenLabs", provider.baseUrl);
     const format = request.outputFormat || "mp3_48000_192";
+    if (request.prompt.length > 4100 || request.seed !== undefined) throw new StudioException("MUSIC_PARAMETERS", "Music prompts are limited to 4100 characters; seeds require a composition plan and are unavailable in prompt mode.", "input");
     const durationMs = Math.max(3_000, Math.min(600_000, Math.round(durationTick / 35_280_000 * 1000)));
-    const response = await fetch(`${provider.baseUrl}/music?output_format=${encodeURIComponent(format)}`, {
+    const response = await this.fetch(`${provider.baseUrl}/music?output_format=${encodeURIComponent(format)}`, {
       method: "POST", signal: signal ?? null,
       headers: { ...headers(provider.apiKey, "elevenlabs"), "content-type": "application/json" },
       body: JSON.stringify({ prompt: request.prompt, music_length_ms: durationMs, model_id: request.model || provider.musicModel, force_instrumental: request.parameters?.forceInstrumental ?? true, ...(request.seed !== undefined ? { seed: request.seed } : {}) })
@@ -121,6 +125,7 @@ export class GenerationProviders {
   }
 
   async transcribe(request: GenerationRequest, filePath: string, signal?: AbortSignal): Promise<TranscriptionResult> {
+    if ((await stat(filePath)).size > 25_000_000) throw new StudioException("TRANSCRIPTION_LIMIT", "Transcribe a bounded region of at most 25 MB.", "input");
     const bytes = await readFile(filePath);
     const form = new FormData();
     form.append("file", new Blob([bytes]), path.basename(filePath));
@@ -131,7 +136,7 @@ export class GenerationProviders {
       form.append("timestamps_granularity", "word");
       if (request.language) form.append("language_code", request.language);
       if (request.parameters?.diarize === true) form.append("diarize", "true");
-      const response = await fetch(`${provider.baseUrl}/speech-to-text`, { method: "POST", signal: signal ?? null, headers: headers(provider.apiKey, "elevenlabs"), body: form });
+      const response = await this.fetch(`${provider.baseUrl}/speech-to-text`, { method: "POST", signal: signal ?? null, headers: headers(provider.apiKey, "elevenlabs"), body: form });
       if (!response.ok) return providerError(response, "ElevenLabs Scribe");
       const data = await response.json() as { text?: string; language_code?: string; words?: Array<{ text?: string; start?: number; end?: number; speaker_id?: string; type?: string }> };
       const words = (data.words ?? []).filter((word) => word.type === undefined || word.type === "word").map((word) => ({ text: word.text ?? "", startSeconds: Number(word.start ?? 0), endSeconds: Number(word.end ?? word.start ?? 0), ...(word.speaker_id ? { speaker: word.speaker_id } : {}) })).filter((word) => word.text.trim());
@@ -139,11 +144,13 @@ export class GenerationProviders {
     }
     const provider = this.config.providers.openaiAudio;
     requireCredential(provider.apiKey, "OpenAI transcription", provider.baseUrl);
-    form.append("model", request.model || provider.transcriptionModel);
+    const transcriptionModel = request.model || provider.transcriptionModel;
+    if (new URL(provider.baseUrl).hostname === "api.openai.com" && transcriptionModel !== "whisper-1") throw new StudioException("TIMESTAMPS_UNSUPPORTED", "Caption word timestamps require whisper-1 on the OpenAI endpoint. Configure that model or use a compatible endpoint with word timestamps.", "input");
+    form.append("model", transcriptionModel);
     form.append("response_format", "verbose_json");
     form.append("timestamp_granularities[]", "word");
     if (request.language) form.append("language", request.language);
-    const response = await fetch(`${provider.baseUrl}/audio/transcriptions`, { method: "POST", signal: signal ?? null, headers: headers(provider.apiKey, "bearer"), body: form });
+    const response = await this.fetch(`${provider.baseUrl}/audio/transcriptions`, { method: "POST", signal: signal ?? null, headers: headers(provider.apiKey, "bearer"), body: form });
     if (!response.ok) return providerError(response, "OpenAI transcription");
     const data = await response.json() as { text?: string; language?: string; words?: Array<{ word?: string; text?: string; start?: number; end?: number }>; segments?: Array<{ text?: string; start?: number; end?: number }> };
     const rawWords: Array<{ text: string; start?: number; end?: number }> = data.words?.length
@@ -163,9 +170,9 @@ export class GenerationProviders {
     const prompt = `${request.prompt}\n\nRequired id: ${id}\nName: ${input.name}\nDuration ticks: ${input.durationTick}\nCanvas: ${input.canvas.width}x${input.canvas.height}, transparent background\nSeed: ${request.seed ?? 1}\nEach node needs properties and transform {position:[x,y],scale:[x,y],rotation,anchor:[x,y],opacity}. Each operation needs id,type,targetId,startTick,durationTick,easing,parameters.`;
     let response: Response;
     if (provider.protocol === "chat_completions") {
-      response = await fetch(`${provider.baseUrl}/chat/completions`, { method: "POST", signal: signal ?? null, headers: { ...headers(provider.apiKey, "bearer"), "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], response_format: { type: "json_object" } }) });
+      response = await this.fetch(`${provider.baseUrl}/chat/completions`, { method: "POST", signal: signal ?? null, headers: { ...headers(provider.apiKey, "bearer"), "content-type": "application/json" }, body: JSON.stringify({ model, messages: [{ role: "system", content: system }, { role: "user", content: prompt }], response_format: { type: "json_object" } }) });
     } else {
-      response = await fetch(`${provider.baseUrl}/responses`, { method: "POST", signal: signal ?? null, headers: { ...headers(provider.apiKey, "bearer"), "content-type": "application/json" }, body: JSON.stringify({ model, instructions: system, input: prompt }) });
+      response = await this.fetch(`${provider.baseUrl}/responses`, { method: "POST", signal: signal ?? null, headers: { ...headers(provider.apiKey, "bearer"), "content-type": "application/json" }, body: JSON.stringify({ model, instructions: system, input: prompt }) });
     }
     if (!response.ok) return providerError(response, "Language provider");
     const data = await response.json() as Record<string, unknown>;

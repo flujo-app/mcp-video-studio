@@ -1,6 +1,6 @@
 import { createHash, randomUUID } from "node:crypto";
-import { createReadStream } from "node:fs";
-import { mkdir, open, readFile, rename, stat, writeFile } from "node:fs/promises";
+import { lstatSync, realpathSync, createReadStream } from "node:fs";
+import { copyFile, mkdir, open, readFile, rename, rm, stat, statfs, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { StudioException } from "./errors.js";
 
@@ -15,7 +15,7 @@ export async function atomicWrite(filePath: string, content: string | Uint8Array
   } finally {
     await handle.close();
   }
-  await rename(temporary, resolved);
+  try { await rename(temporary, resolved); } finally { await rm(temporary, { force: true }).catch(() => undefined); }
 }
 
 export async function readJson<T>(filePath: string): Promise<T> {
@@ -48,7 +48,7 @@ export async function ensureInside(root: string, candidate: string): Promise<str
   const resolvedRoot = path.resolve(root);
   const resolved = path.resolve(candidate);
   if (!isInside(resolvedRoot, resolved)) throw new StudioException("PATH_OUTSIDE_ROOT", `${resolved} is outside ${resolvedRoot}.`, "policy");
-  return resolved;
+  return confinedPath(resolvedRoot,resolved);
 }
 
 export async function writeJson(filePath: string, value: unknown): Promise<void> {
@@ -56,6 +56,22 @@ export async function writeJson(filePath: string, value: unknown): Promise<void>
 }
 
 export async function copyFileAtomic(source: string, destination: string): Promise<void> {
-  const data = await readFile(source);
-  await atomicWrite(destination, data);
+  await mkdir(path.dirname(destination), { recursive: true });
+  const [info,disk]=await Promise.all([stat(source),statfs(path.dirname(destination))]);
+  if(info.size+64*1024*1024>disk.bavail*disk.bsize)throw new StudioException("DISK_CAPACITY","Insufficient free space to publish this media atomically.","runtime");
+  const temporary=path.join(path.dirname(destination),`.${path.basename(destination)}.${randomUUID()}.tmp`);
+  try{await copyFile(source,temporary);const handle=await open(temporary,"r+");try{await handle.sync();}finally{await handle.close();}await rename(temporary,destination);}finally{await rm(temporary,{force:true}).catch(()=>undefined);}
+}
+
+export function confinedPath(root:string,candidate:string):string{
+  const resolvedRoot=path.resolve(root),resolved=path.resolve(candidate);
+  if(!isInside(resolvedRoot,resolved))throw new StudioException("PATH_OUTSIDE_ROOT","Managed project path escapes its directory.","policy");
+  let current=resolved;
+  for(;;){
+    try{if(lstatSync(current).isSymbolicLink())throw new StudioException("SYMLINK_PATH","Managed project paths cannot traverse symlinks. Use an explicit linked media asset instead.","policy");}
+    catch(error){if((error as NodeJS.ErrnoException).code!=="ENOENT")throw error;}
+    if(current===resolvedRoot)break;
+    current=path.dirname(current);
+  }
+  return resolved;
 }

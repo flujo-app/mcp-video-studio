@@ -48,6 +48,18 @@ export function validateProject(project: StudioProject): StudioProject {
       if (caption.startTick % frameTick !== 0 || caption.durationTick % frameTick !== 0) throw new StudioException("CAPTION_GRID_MISMATCH", `Caption ${caption.id} is not aligned to the project frame grid.`, "input", { captionId: caption.id, frameTick });
     }
   }
+  for (const animation of normalized.animations) {
+    const nodes = new Map(animation.nodes.map(node => [node.id, node]));
+    if (nodes.size !== animation.nodes.length || new Set(animation.operations.map(operation => operation.id)).size !== animation.operations.length) throw new StudioException('DUPLICATE_ID', 'Animation IDs must be unique.', 'input');
+    for (const node of animation.nodes) {
+      const seen = new Set([node.id]); let parentId = node.parentId;
+      while (parentId) {
+        if (seen.has(parentId) || !nodes.has(parentId)) throw new StudioException('INVALID_HIERARCHY', 'Animation parent references must exist and be acyclic.', 'input');
+        seen.add(parentId); parentId = nodes.get(parentId)!.parentId;
+      }
+    }
+    for (const operation of animation.operations) if (operation.type !== 'wait' && !nodes.has(operation.targetId)) throw new StudioException('INVALID_ANIMATION_TARGET', 'Animation operation target does not exist.', 'input');
+  }
   for (const artifact of normalized.generatedArtifacts) {
     const sequence = normalized.sequences.find((item) => item.id === artifact.scope.sequenceId);
     if (!sequence) throw new StudioException("GENERATION_SEQUENCE_MISSING", `Generated artifact ${artifact.id} references an unknown sequence.`, "input");

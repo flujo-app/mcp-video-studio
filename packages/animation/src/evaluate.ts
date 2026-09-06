@@ -20,7 +20,7 @@ function blendTransform(current: Transform, target: Partial<Transform>, progress
 
 export function evaluateAnimation(document: AnimationDocument, tick: number): EvaluatedAnimationNode[] {
   const states = new Map(document.nodes.map((node) => [node.id, { ...structuredClone(node), visible: true }]));
-  const operations = [...document.operations].sort((a, b) => a.startTick - b.startTick || a.id.localeCompare(b.id));
+  const operations = [...document.operations].sort((a, b) => a.startTick - b.startTick);
   for (const operation of operations) {
     const state = states.get(operation.targetId);
     if (!state) continue;

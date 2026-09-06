@@ -2,7 +2,7 @@ import { randomUUID } from "node:crypto";
 import { mkdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { type MediaAsset, type MutationResult, type ProjectDelta } from "@mcp-video-studio/contracts";
-import { copyFileAtomic, ProjectStore, sha256File, StudioException } from "@mcp-video-studio/core";
+import { confinedPath, copyFileAtomic, ProjectStore, sha256File, StudioException } from "@mcp-video-studio/core";
 import type { StudioConfig } from "./config.js";
 import { mediaKindFor, probeMedia } from "./probe.js";
 
@@ -31,8 +31,8 @@ export async function importMedia(store: ProjectStore, filePath: string, storage
   const id = randomUUID();
   let storage: MediaAsset["storage"];
   if (storageMode === "managed") {
-    const relativePath = path.join("assets", sha256.slice(0, 2), sha256.slice(2, 4), `${sha256}${extension}`);
-    const target = path.join(store.root, relativePath);
+    const relativePath = path.posix.join("assets", sha256.slice(0, 2), sha256.slice(2, 4), `${sha256}${extension}`);
+    const target = confinedPath(store.root, path.join(store.root, relativePath));
     await mkdir(path.dirname(target), { recursive: true });
     await copyFileAtomic(source, target);
     storage = { mode: "managed", sha256, relativePath, bytes };
@@ -46,7 +46,7 @@ export async function importMedia(store: ProjectStore, filePath: string, storage
 }
 
 export function mediaPath(store: ProjectStore, media: MediaAsset): string {
-  return media.storage.mode === "managed" ? path.join(store.root, media.storage.relativePath) : media.storage.path;
+  return media.storage.mode === "managed" ? confinedPath(store.root,path.join(store.root, media.storage.relativePath)) : media.storage.path;
 }
 
 export async function relinkMedia(store: ProjectStore, mediaId: string, filePath: string, expectedRevision: number, config: StudioConfig, signal?: AbortSignal): Promise<{ mutation: MutationResult; media: MediaAsset }> {
@@ -78,8 +78,8 @@ export async function consolidateMedia(store: ProjectStore, mediaIds: string[] |
   for (const media of selected) {
     const source = mediaPath(store, media);
     const extension = path.extname(source).toLowerCase() || ".bin";
-    const relativePath = path.join("assets", media.storage.sha256.slice(0, 2), media.storage.sha256.slice(2, 4), `${media.storage.sha256}${extension}`);
-    const target = path.join(store.root, relativePath);
+    const relativePath = path.posix.join("assets", media.storage.sha256.slice(0, 2), media.storage.sha256.slice(2, 4), `${media.storage.sha256}${extension}`);
+    const target = confinedPath(store.root, path.join(store.root, relativePath));
     await mkdir(path.dirname(target), { recursive: true });
     await copyFileAtomic(source, target);
     replacements.set(media.id, { ...media, storage: { mode: "managed", sha256: media.storage.sha256, relativePath, bytes: media.storage.bytes } });

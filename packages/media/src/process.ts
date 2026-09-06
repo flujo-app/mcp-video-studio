@@ -50,6 +50,7 @@ function stopProcess(child: ChildProcessWithoutNullStreams): void {
 }
 
 export async function runProcess(executable: string, args: string[], options: ProcessOptions = {}): Promise<ProcessResult> {
+  if(options.signal?.aborted)throw new StudioException("CANCELLED","Process was cancelled before starting.","runtime");
   if (!executable.trim()) throw new StudioException("INVALID_EXECUTABLE", "Executable cannot be empty.", "input");
   const started = Date.now();
   const max = options.maxOutputChars ?? 200_000;
@@ -63,6 +64,7 @@ export async function runProcess(executable: string, args: string[], options: Pr
     stdio: ["pipe", "pipe", "pipe"]
   });
 
+  child.stdin.on("error", () => undefined);
   let progress: Record<string, string> = {};
   let progressBuffer = "";
   child.stdout.setEncoding("utf8");
@@ -71,13 +73,13 @@ export async function runProcess(executable: string, args: string[], options: Pr
   child.stderr.on("data", (chunk: string) => {
     stderr.append(chunk);
     if (options.onProgress) {
-      progressBuffer += chunk;
+      progressBuffer = (progressBuffer + chunk).slice(-32768);
       const lines = progressBuffer.split(/\r?\n/);
       progressBuffer = lines.pop() ?? "";
       for (const line of lines) {
         const separator = line.indexOf("=");
         if (separator <= 0) continue;
-        progress[line.slice(0, separator)] = line.slice(separator + 1);
+        if(["out_time_us","out_time_ms","frame","fps","speed","progress"].includes(line.slice(0,separator)))progress[line.slice(0, separator)] = line.slice(separator + 1);
         if (line.startsWith("progress=")) {
           options.onProgress(progress);
           progress = {};

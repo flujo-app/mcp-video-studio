@@ -20,6 +20,8 @@ export function defaultClip(trackId: string, source: Clip["source"], name: strin
 
 export const DEFAULT_EXPORT_PRESETS: ExportPreset[] = [
   { id: "web-h264-1080p", name: "Web H.264", container: "mp4", videoCodec: "libx264", audioCodec: "aac", crf: 18, audioBitrate: "192k", faststart: true },
+  { id: "web-vp9", name: "Web VP9 / Opus", container: "webm", videoCodec: "libvpx-vp9", audioCodec: "libopus", crf: 30, audioBitrate: "128k" },
+  { id: "audio-wav", name: "Audio WAV 24-bit", container: "wav", audioCodec: "pcm_s24le" },
   { id: "archive-ffv1", name: "Lossless FFV1", container: "mkv", videoCodec: "ffv1", audioCodec: "flac" }
 ];
 

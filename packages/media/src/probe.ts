@@ -37,7 +37,7 @@ function firstFinite(...values: Array<string | undefined>): number {
 }
 
 export async function probeMedia(filePath: string, config: StudioConfig, signal?: AbortSignal): Promise<MediaProbe> {
-  const result = await runChecked(config.ffprobePath, ["-v", "error", "-print_format", "json", "-show_format", "-show_streams", path.resolve(filePath)], { signal, timeoutMs: 60_000 });
+  const result = await runChecked(config.ffprobePath, ["-protocol_whitelist", "file,pipe,data", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path.resolve(filePath)], { signal, timeoutMs: 60_000 });
   let data: FfprobeJson;
   try { data = JSON.parse(result.stdout) as FfprobeJson; }
   catch { throw new StudioException("INVALID_PROBE_OUTPUT", "ffprobe returned invalid JSON.", "runtime", { stdout: result.stdout }); }
@@ -68,6 +68,6 @@ export function mediaKindFor(filePath: string, probe: MediaProbe): MediaKind {
 }
 
 export async function verifyDecode(filePath: string, config: StudioConfig, signal?: AbortSignal): Promise<Record<string, unknown>> {
-  const result = await runChecked(config.ffmpegPath, ["-hide_banner", "-v", "error", "-xerror", "-i", path.resolve(filePath), "-map", "0", "-f", "null", "-"], { signal, timeoutMs: 12 * 60 * 60_000 });
+  const result = await runChecked(config.ffmpegPath, ["-hide_banner", "-v", "error", "-xerror", "-protocol_whitelist", "file,pipe,data", "-i", path.resolve(filePath), "-map", "0", "-f", "null", "-"], { signal, timeoutMs: 12 * 60 * 60_000 });
   return { success: true, path: path.resolve(filePath), durationMs: result.durationMs, stderr: result.stderr };
 }

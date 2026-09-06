@@ -355,7 +355,22 @@ export interface JobRecord {
   error?: StudioError;
 }
 
+export type AdvancedProjectCommand =
+  | { type: "clip.slip"; sequenceId: UUID; clipId: UUID; deltaTick: number }
+  | { type: "clip.roll"; sequenceId: UUID; clipId: UUID; tick: number }
+  | { type: "clip.slide"; sequenceId: UUID; clipId: UUID; deltaTick: number }
+  | { type: "gap.remove"; sequenceId: UUID; startTick: number; endTick: number }
+  | { type: "audio.gain.range"; sequenceId: UUID; targetType: "clip" | "track"; targetId: UUID; startTick: number; endTick: number; gainDb: number; laneId?: UUID }
+  | { type: "animation.node.add"; animationId: UUID; node: AnimationNode }
+  | { type: "animation.node.update"; animationId: UUID; nodeId: UUID; patch: Partial<Pick<AnimationNode, "name" | "properties" | "transform">> & { parentId?: UUID | null } }
+  | { type: "animation.node.remove"; animationId: UUID; nodeId: UUID; cascade: boolean }
+  | { type: "animation.operation.add"; animationId: UUID; operation: AnimationOperation }
+  | { type: "animation.operation.update"; animationId: UUID; operationId: UUID; patch: Partial<Omit<AnimationOperation, "id">> }
+  | { type: "animation.operation.remove"; animationId: UUID; operationId: UUID }
+  | { type: "animation.operations.reorder"; animationId: UUID; operationIds: UUID[] };
+
 export type ProjectCommand =
+  | AdvancedProjectCommand
   | { type: "track.add"; sequenceId: UUID; track: Omit<Track, "sequenceId"> }
   | { type: "track.update"; sequenceId: UUID; trackId: UUID; patch: Partial<Pick<Track, "name" | "order" | "locked" | "muted" | "solo" | "hidden" | "gainDb" | "pan">> }
   | { type: "track.remove"; sequenceId: UUID; trackId: UUID; removeClips: boolean }

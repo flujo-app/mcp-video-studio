@@ -2,6 +2,7 @@ import { randomUUID } from "node:crypto";
 import type { Clip, ProjectCommand, ProjectDelta, Sequence, StudioProject, Track } from "@mcp-video-studio/contracts";
 import { rational } from "@mcp-video-studio/contracts";
 import { StudioException } from "./errors.js";
+import { isAdvancedCommand, expandAdvancedCommand, relatedClipIds } from "./advanced.js";
 
 function sequenceById(project: StudioProject, id: string): Sequence {
   const sequence = project.sequences.find((candidate) => candidate.id === id);
@@ -96,6 +97,13 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
   const warnings: string[] = [];
 
   for (const command of commands) {
+    if (isAdvancedCommand(command)) {
+      const applied = applyProjectCommands(next, expandAdvancedCommand(next, command));
+      Object.assign(next, applied.project);
+      for (const key of Object.keys(changed) as Array<keyof ProjectDelta>) for (const id of applied.changed[key]) addUnique(changed[key], id);
+      warnings.push(...applied.warnings);
+      continue;
+    }
     if (command.type === "project.rename") {
       next.name = command.name.trim();
       if (!next.name) throw new StudioException("INVALID_NAME", "Project name cannot be empty.", "input");
@@ -201,15 +209,17 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       sequence.clips.push(clip);
       addUnique(changed.clips, clip.id);
     } else if (command.type === "clip.move") {
-      const selected = command.clipIds.map((id) => clipById(sequence, id));
+      const explicit = command.clipIds.map((id) => clipById(sequence, id));
+      const selected = relatedClipIds(sequence, command.clipIds).map(id => clipById(sequence, id));
       assertUnlocked(sequence, command.targetTrackId);
       selected.forEach((clip) => assertUnlocked(sequence, clip.trackId));
-      const base = Math.min(...selected.map((clip) => clip.startTick));
+      const base = Math.min(...explicit.map((clip) => clip.startTick));
+      const sourceTrack = explicit.find(clip => clip.startTick === base)!.trackId;
       const deltaTick = command.startTick - base;
       if (command.ripple) rippleAfter(sequence, base, -Math.max(...selected.map((clip) => clip.durationTick)), new Set(command.clipIds));
       for (const clip of selected) {
         clip.startTick += deltaTick;
-        clip.trackId = command.targetTrackId;
+        if (clip.trackId === sourceTrack) clip.trackId = command.targetTrackId;
         if (clip.startTick < 0) throw new StudioException("NEGATIVE_TIME", "A moved clip would start before zero.", "input");
         addUnique(changed.clips, clip.id);
       }

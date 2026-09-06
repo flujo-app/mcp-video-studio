@@ -2,10 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { framesToTicks, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
+import { framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import { ProjectStore, sequenceDuration, sha256File, StudioException } from "@mcp-video-studio/core";
 import { renderAnimation } from "@mcp-video-studio/animation";
 import { ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
+import { audioAutomationFilters } from "./automation.js";
 import { atempoChain, audioEffectFilters, clipTransformFilters, videoEffectFilters } from "./filters.js";
 
 export interface RenderOptions {
@@ -49,7 +50,6 @@ async function publishFile(sourcePath: string, outputPath: string): Promise<void
   const temporary = path.join(path.dirname(output), `.${path.basename(output, extension)}.${randomUUID()}.cache${extension}`);
   try {
     await copyFile(sourcePath, temporary);
-    await rm(output, { force: true });
     await rename(temporary, output);
   } catch (error) {
     await rm(temporary, { force: true }).catch(() => undefined);
@@ -122,12 +122,13 @@ function mediaById(project: StudioProject, id: string): MediaAsset {
 }
 
 function ffmpegColor(value: string): string {
+  if (!/^(?:#[0-9a-f]{6}(?:[0-9a-f]{2})?|[a-z]{1,24})$/i.test(value)) throw new StudioException("INVALID_COLOR", "Use a hexadecimal or named color.", "input");
   return value.replace(/^#/, "0x");
 }
 
 function ffmpegCaptionColor(value: string): string {
   const match = /^#([0-9a-f]{6})([0-9a-f]{2})?$/i.exec(value);
-  if (!match) return value;
+  if (!match) return ffmpegColor(value);
   const alpha = match[2] ? Number.parseInt(match[2], 16) / 255 : 1;
   return `0x${match[1]}@${alpha.toFixed(3)}`;
 }
@@ -200,7 +201,7 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
   const { width, height } = project.settings.raster;
   const statements: string[] = [`color=c=${ffmpegColor(project.settings.background)}:s=${width}x${height}:r=${fps}:d=${durationSeconds},format=rgba[base0]`];
   let videoLabel = "base0";
-  const visual = inputs.filter((input) => input.clip.source.type === "color" || input.media?.probe.hasVideo || input.media?.kind === "image" || input.clip.source.type === "animation")
+  const visual = inputs.filter(input => !sequence.tracks.find(track => track.id === input.clip.trackId)?.hidden).filter((input) => input.clip.source.type === "color" || input.media?.probe.hasVideo || input.media?.kind === "image" || input.clip.source.type === "animation")
     .sort((a, b) => {
       const trackA = sequence.tracks.find((track) => track.id === a.clip.trackId)?.order ?? 0;
       const trackB = sequence.tracks.find((track) => track.id === b.clip.trackId)?.order ?? 0;
@@ -261,11 +262,12 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
       `aformat=sample_rates=${project.settings.sampleRate}:channel_layouts=${project.settings.channels === 1 ? "mono" : project.settings.channels === 6 ? "5.1" : "stereo"}`,
       ...atempoChain(rate),
       `volume=${clip.audio.gainDb + track.gainDb}dB`,
-      `stereotools=balance_out=${Math.max(-1, Math.min(1, clip.audio.pan + track.pan))}`,
+      ...(project.settings.channels === 2 ? [`stereotools=balance_out=${Math.max(-1, Math.min(1, clip.audio.pan + track.pan))}`] : []),
       ...(clip.audio.fadeInTick > 0 ? [`afade=t=in:st=0:d=${ticksToSeconds(clip.audio.fadeInTick)}`] : []),
       ...(clip.audio.fadeOutTick > 0 ? [`afade=t=out:st=${Math.max(0, ticksToSeconds(clip.durationTick - clip.audio.fadeOutTick))}:d=${ticksToSeconds(clip.audio.fadeOutTick)}`] : []),
       ...audioEffectFilters([...trackEffects(track), ...clip.audio.effects]),
-      `adelay=${Math.round(ticksToSeconds(clip.startTick) * 1000)}:all=1`
+      ...audioAutomationFilters(project, sequence, clip),
+      `adelay=${Math.round(clip.startTick / ticksPerSample(project.settings.sampleRate))}S:all=1`
     ];
     const label = `aclip${audioIndex}`;
     statements.push(`[${input.inputIndex}:a]${filters.join(",")}[${label}]`);
@@ -300,7 +302,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: asset.storage.sha256, offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
     output: { maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
-    renderer: 3
+    renderer: 4
   });
   const cachePath = path.join(store.root, "cache", "renders", `${renderKey}.${preset.container}`);
   const durationTick = sequenceDuration(sequence);
@@ -321,7 +323,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
       };
     } catch (error) {
       if (options.signal?.aborted) throw error;
-      await Promise.all([rm(cachePath, { force: true }), rm(options.outputPath, { force: true })]).catch(() => undefined);
+      await rm(cachePath, { force: true }).catch(() => undefined);
     }
   }
   const scratch = path.join(config.scratchDir, `render-${randomUUID()}`);
@@ -339,11 +341,13 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     const graphPath = path.join(scratch, "filter-complex.txt");
     await writeFile(graphPath, compiled.graph, "utf8");
     const inputArgs = inputs.flatMap((input) => input.args);
+    const audioOnly = preset.container === "wav";
+    const graph = audioOnly ? compiled.graph + `;[${compiled.videoLabel}]nullsink` : compiled.graph;
+    await writeFile(graphPath, graph, "utf8");
     const args = [
       ...inputArgs, "-filter_complex_script", graphPath,
-      "-map", `[${compiled.videoLabel}]`, "-map", `[${compiled.audioLabel}]`,
-      "-frames:v", String(compiled.frameCount), "-shortest",
-      "-c:v", preset.videoCodec ?? "libx264",
+      ...(!audioOnly ? ["-map", `[${compiled.videoLabel}]`, "-frames:v", String(compiled.frameCount), "-c:v", preset.videoCodec ?? "libx264"] : []),
+      "-map", `[${compiled.audioLabel}]`, "-t", String(ticksToSeconds(compiled.durationTick)),
       ...(preset.videoCodec === "libx264" ? ["-preset", options.encoderPreset ?? "veryfast", "-crf", String(options.crf ?? preset.crf ?? 18)] : []),
       "-c:a", preset.audioCodec ?? "aac",
       ...(preset.audioBitrate ? ["-b:a", preset.audioBitrate] : []),

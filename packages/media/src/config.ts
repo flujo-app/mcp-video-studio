@@ -15,6 +15,9 @@ export interface StudioConfig {
   gatewayHost: string;
   gatewayPort: number;
   publicOrigin?: string;
+  mcpToken?: string;
+  allowedHosts?: string[];
+  allowedOrigins?: string[];
   providers: {
     language: { baseUrl: string; model: string; protocol: "responses" | "chat_completions"; apiKey?: string };
     openaiAudio: { baseUrl: string; speechModel: string; transcriptionModel: string; voice: string; apiKey?: string };
@@ -35,7 +38,17 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): StudioConfig {
   const openaiApiKey = env.VIDEO_STUDIO_OPENAI_API_KEY?.trim() || env.OPENAI_API_KEY?.trim();
   const elevenLabsApiKey = env.VIDEO_STUDIO_ELEVENLABS_API_KEY?.trim() || env.ELEVENLABS_API_KEY?.trim();
   const elevenLabsVoiceId = env.VIDEO_STUDIO_ELEVENLABS_VOICE_ID?.trim();
+  if (publicOrigin) {
+    const value = new URL(publicOrigin);
+    if (!['http:', 'https:'].includes(value.protocol) || value.username || value.password || value.search || value.hash || value.pathname !== '/') throw new Error('VIDEO_STUDIO_PUBLIC_ORIGIN must be a bare HTTP(S) origin.');
+  }
+  const mcpToken = env.VIDEO_STUDIO_MCP_TOKEN?.trim();
+  if (mcpToken && !/^[A-Za-z0-9._~-]{32,512}$/.test(mcpToken)) throw new Error('VIDEO_STUDIO_MCP_TOKEN must have 32-512 URL-safe characters.');
+  const allowedHosts = (env.VIDEO_STUDIO_ALLOWED_HOSTS ?? '').split(',').map(value => value.trim()).filter(Boolean);
+  const allowedOrigins = (env.VIDEO_STUDIO_ALLOWED_ORIGINS ?? '').split(',').map(value => value.trim()).filter(Boolean);
   return {
+    ...(mcpToken ? { mcpToken } : {}),
+    allowedHosts, allowedOrigins,
     dataDir,
     projectsDir: path.resolve(env.VIDEO_STUDIO_PROJECTS_DIR?.trim() || path.join(dataDir, "projects")),
     scratchDir: path.resolve(env.VIDEO_STUDIO_SCRATCH_DIR?.trim() || path.join(dataDir, "scratch")),

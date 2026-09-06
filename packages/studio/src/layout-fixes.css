@@ -430,3 +430,9 @@
 .display-pip .monitor { max-height: calc(100% - 28px); }
 .display-pip .transport { height: 28px; }
 .display-pip .transport span { display: none; }
+
+/* Keyboard, zoom and user display preferences apply to every editing surface. */
+:focus-visible{outline:3px solid #b7a5ff;outline-offset:3px}.topbar{flex-wrap:wrap;min-height:3.25rem;height:auto}.app-shell{grid-template-rows:auto auto minmax(0,1fr)}.toolbar{flex-wrap:wrap}.modal-backdrop{overflow:auto}.generation-modal,.project-modal{max-height:90vh;overflow:auto}.inspector fieldset button{margin:.25rem;padding:.4rem}.hint{line-height:1.5}.status{max-width:20rem;overflow:hidden;text-overflow:ellipsis}
+@media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
+@media(forced-colors:active){button,input,textarea,select,.timeline-clip,.caption-block{border:1px solid ButtonText!important}.selected{outline:3px solid Highlight!important}.status-dot{background:Highlight!important}}
+@media(max-width:1000px){html,body,#root{height:auto;min-height:100%;overflow:auto}.app-shell{height:auto;min-height:100vh;display:block}.workspace{display:flex;flex-direction:column}.media-bin,.inspector{max-height:28rem;overflow:auto}.center-stage{min-height:35rem}.generation-layout,.project-grid{grid-template-columns:1fr}.topbar{position:sticky;top:0}.project-title{min-width:0}.status{display:none}}

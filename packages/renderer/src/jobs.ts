@@ -25,6 +25,8 @@ export class JobManager {
   private readonly listeners = new Set<JobListener>();
   private readonly persistTails = new Map<string, Promise<void>>();
   private running = 0;
+  private closed = false;
+  private readonly executing = new Set<Promise<void>>();
 
   constructor(readonly directory: string, readonly concurrency = 2) {}
 
@@ -61,6 +63,7 @@ export class JobManager {
   }
 
   async enqueue(type: JobRecord["type"], message: string, executor: JobExecutor): Promise<JobRecord> {
+    if (this.closed || this.queue.length >= 64) throw new Error("Job queue is closed or full; wait for active jobs to finish.");
     const now = new Date().toISOString();
     const record: JobRecord = { id: randomUUID(), type, status: "queued", progress: 0, message, createdAt: now, updatedAt: now };
     const controller = new AbortController();
@@ -85,12 +88,23 @@ export class JobManager {
     return structuredClone(record);
   }
 
+  async close(): Promise<void> {
+    this.closed = true;
+    await Promise.allSettled([...this.controllers.keys()].map(id => this.cancel(id)));
+    this.queue.length = 0;
+    await Promise.allSettled([...this.executing]);
+    await Promise.allSettled([...this.persistTails.values()]);
+    this.controllers.clear(); this.listeners.clear();
+  }
+
   private async drain(): Promise<void> {
     while (this.running < this.concurrency && this.queue.length > 0) {
       const job = this.queue.shift()!;
-      if (job.controller.signal.aborted) continue;
+      if (job.controller.signal.aborted) { this.controllers.delete(job.record.id); continue; }
       this.running += 1;
-      void this.execute(job).finally(() => { this.running -= 1; void this.drain(); });
+      const execution = this.execute(job).finally(() => { this.running -= 1; this.executing.delete(execution); if (!this.closed) void this.drain(); });
+      this.executing.add(execution);
+      void execution.catch(() => { this.controllers.delete(job.record.id); });
     }
   }
 

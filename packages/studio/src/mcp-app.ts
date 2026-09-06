@@ -1,3 +1,4 @@
+import manifest from "../../../package.json" with { type: "json" };
 import { App } from "@modelcontextprotocol/ext-apps";
 
 export type McpUiDisplayMode = "inline" | "fullscreen" | "pip";
@@ -17,7 +18,7 @@ type DisplayStateListener = () => void;
 const embedded = window.parent !== window && new URLSearchParams(window.location.search).get("mcpApp") === "1";
 const mcpApp = embedded
   ? new App(
-      { name: "MCP Video Studio", version: "0.1.0" },
+      { name: "MCP Video Studio", version: manifest.version },
       { availableDisplayModes: STUDIO_DISPLAY_MODES },
       { autoResize: true },
     )
