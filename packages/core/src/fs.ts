@@ -32,7 +32,13 @@ export async function atomicWrite(
     } finally {
       await handle.close();
     }
-    await rename(temporary, resolved);
+    // Windows readers and file scanners can briefly deny replacement despite a
+    // complete, fsynced temporary. Retry the same rename; never unlink the old data.
+    // Seven attempts, with at most 1.26 seconds of backoff.
+    for(let attempt=0;;attempt++){
+      try{await rename(temporary,resolved);break;}
+      catch(error){if(process.platform!=="win32"||attempt>=6||!["EPERM","EACCES","EBUSY"].includes((error as NodeJS.ErrnoException).code??""))throw error;await new Promise(resolve=>setTimeout(resolve,20*2**attempt));}
+    }
   } finally {
     await rm(temporary, { force: true }).catch(() => undefined);
   }

@@ -7,7 +7,7 @@ import { chromium } from "patchright";
 import axe from "axe-core";
 import { defaultClip, secondsToTicks } from "@mcp-video-studio/contracts";
 import { browserEnvironment } from "../packages/animation/src/sandbox.js";
-import { generationFixture, until } from "./generation-fixture.js";
+import { generationFixture, until, providerSecret } from "./generation-fixture.js";
 const integration =
   process.env.RUN_BROWSER_INTEGRATION === "1" &&
   process.env.RUN_FFMPEG_INTEGRATION === "1"
@@ -25,6 +25,7 @@ integration(
         { name: "export-history-browser", version: "1" },
         { versionNegotiation: { mode: "auto" } },
       );
+    let childStderr="",failed=false;
     try {
       let project = await f.store.read();
       const seq = project.sequences[0]!,
@@ -39,8 +40,7 @@ integration(
       ]);
       project = await f.store.read();
       await f.runtime.jobs.close();
-      await cli.connect(
-        new StdioClientTransport({
+      const transport = new StdioClientTransport({
           command: process.execPath,
           args: [path.resolve("dist/index.js"), "--stdio"],
           env: {
@@ -53,8 +53,9 @@ integration(
             VIDEO_STUDIO_GATEWAY_PORT: "0",
           },
           stderr: "pipe",
-        }),
-      );
+        });
+      transport.stderr?.on("data",chunk=>{childStderr=(childStderr+String(chunk)).slice(-32000);});
+      await cli.connect(transport);
       const opened = await cli.callTool({
           name: "open_studio",
           arguments: { projectPath: f.projectPath },
@@ -164,10 +165,17 @@ integration(
           nodes: v.nodes.map((n) => n.target),
         })),
       ).toEqual([]);
+    } catch(error){
+      failed=true;
+      const redact=(value:string)=>value.replaceAll(providerSecret,"[provider secret redacted]").replace(/Bearer\s+[^\s"']+/gi,"Bearer [redacted]").replace(/([?&]token=)[^&\s"']+/g,"$1[redacted]");
+      const diagnostic=redact(childStderr),cause=new Error(redact(String(error)));
+      if(error instanceof Error&&error.stack)cause.stack=redact(error.stack);
+      throw new Error(cause.message+(diagnostic?"; child stderr: "+diagnostic:"; child stderr was empty"),{cause});
     } finally {
-      await browser.close();
-      await cli.close();
-      await f.close();
+      // Stop browser/CLI access before removing their project and provider fixture.
+      const cleanup:unknown[]=[];
+      for(const close of [()=>browser.close(),()=>cli.close(),()=>f.close()])try{await close();}catch(error){cleanup.push(error);}
+      if(!failed&&cleanup.length)throw cleanup[0];
     }
   },
   120000,
