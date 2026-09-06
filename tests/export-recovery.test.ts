@@ -47,8 +47,15 @@ it("ready export recovery confirms a published checksum, preserves mismatched ou
       const hash = await sha256File(output);
       await writeFile(temporary, "staged");
       await writeFile(copyTemporary, "interrupted copy");
+      const jobId = randomUUID();
+      await mkdir(path.join(root, "jobs"), { recursive: true });
+      await writeFile(
+        path.join(root, "jobs", jobId + ".json"),
+        JSON.stringify({ id: jobId, status: "running", type: "render" }),
+      );
       const record = {
         id,
+        jobId,
         status: "ready",
         ownerPid: deadPid,
         projectPath: store.root,
@@ -67,6 +74,11 @@ it("ready export recovery confirms a published checksum, preserves mismatched ou
         JSON.stringify(record),
       );
       await recoverExportHistory(config);
+      expect(
+        JSON.parse(
+          await readFile(path.join(root, "jobs", jobId + ".json"), "utf8"),
+        ).status,
+      ).toBe(published ? "completed" : "running");
       expect((await getExportHistory(config, id)).export.status).toBe(
         published ? "completed" : "interrupted",
       );

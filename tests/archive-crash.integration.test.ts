@@ -2,15 +2,7 @@ import path from "node:path";
 import os from "node:os";
 import { spawn } from "node:child_process";
 import { createInterface } from "node:readline";
-import {
-  mkdtemp,
-  writeFile,
-  readFile,
-  readdir,
-  rm,
-  stat,
-  open,
-} from "node:fs/promises";
+import { mkdtemp, writeFile, readFile, rm, stat, open } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { ProjectStore, sha256File } from "@mcp-video-studio/core";
 import { exportProjectArchive } from "../packages/server/src/archive.js";
@@ -21,6 +13,47 @@ async function until(check: () => boolean | Promise<boolean>, timeout = 20000) {
     if (Date.now() > end) throw new Error("Crash fixture timed out");
     await new Promise((r) => setTimeout(r, 1));
   }
+}
+async function waitForPayloadWrite(
+  root: string,
+  journal: string,
+  jobId: string,
+) {
+  let temporary = "",
+    last: Record<string, unknown> = {};
+  try {
+    await until(async () => {
+      const record = JSON.parse(await readFile(journal, "utf8"));
+      const job = JSON.parse(
+        await readFile(path.join(root, "jobs", jobId + ".json"), "utf8"),
+      );
+      temporary = record.temporary ?? "";
+      last = {
+        operationStatus: record.status,
+        jobStatus: job.status,
+        progress: job.progress,
+        message: job.message,
+        error: record.error ?? job.error,
+        temporaryExists:
+          !!temporary && !!(await stat(temporary).catch(() => undefined)),
+      };
+      if (
+        ["completed", "failed", "cancelled"].includes(record.status) ||
+        ["completed", "failed", "cancelled"].includes(job.status)
+      )
+        throw new Error(
+          "Archive passed its crash checkpoint: " + JSON.stringify(last),
+        );
+      return (
+        !!last.temporaryExists && job.status === "running" && job.progress > 0.1
+      );
+    });
+  } catch (error) {
+    throw new Error(
+      String(error) + "; last durable archive state: " + JSON.stringify(last),
+    );
+  }
+  return temporary;
 }
 async function session(root: string) {
   const child = spawn(
@@ -157,15 +190,13 @@ integration(
         "archive-operations",
         exported.operationId + ".json",
       );
-      let temporary = "";
-      await until(async () => {
-        const record = JSON.parse(await readFile(journal, "utf8"));
-        temporary = record.temporary ?? "";
-        return (
-          !!temporary &&
-          (await stat(temporary).catch(() => undefined))?.size! > 1024 * 1024
-        );
-      });
+      // NTFS may not expose a writer's updated file size until the handle closes.
+      // A durable progress update follows an actual awaited payload write on every OS.
+      const temporary = await waitForPayloadWrite(
+        root,
+        journal,
+        exported.job.id,
+      );
       await running.kill();
       running = undefined;
       expect(await readFile(output, "utf8")).toBe("prior completed export");
@@ -191,24 +222,11 @@ integration(
         "archive-operations",
         imported.operationId + ".json",
       );
-      let staging = "";
-      await until(async () => {
-        const record = JSON.parse(await readFile(importJournal, "utf8"));
-        staging = record.temporary ?? "";
-        if (!staging) return false;
-        const assets = await readdir(path.join(staging, "assets")).catch(
-          () => [],
-        );
-        if (!assets[0]) return false;
-        return (
-          (
-            await stat(path.join(staging, "assets", assets[0])).catch(
-              () => undefined,
-            )
-          )?.size! >
-          1024 * 1024
-        );
-      });
+      const staging = await waitForPayloadWrite(
+        root,
+        importJournal,
+        imported.job.id,
+      );
       await running.kill();
       running = undefined;
       await expect(stat(destination)).rejects.toMatchObject({ code: "ENOENT" });

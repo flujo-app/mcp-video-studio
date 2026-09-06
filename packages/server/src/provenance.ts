@@ -279,6 +279,7 @@ export async function recoverExportHistory(config: StudioConfig) {
         () => undefined,
       );
     await save(config, record);
+    if(record.status==='completed'&&record.jobId&&idPattern.test(record.jobId)&&record.result){const jobPath=confinedPath(config.dataDir,path.join(config.dataDir,'jobs',record.jobId+'.json'));const job=await readJson<Record<string,unknown>>(jobPath).catch(()=>undefined);if(job&&['queued','running'].includes(String(job.status)))await writeJson(jobPath,{...job,status:'completed',progress:1,message:'Recovered verified export publication.',updatedAt:new Date().toISOString(),result:{...record.result,exportId:record.id,provenanceStatus:'completed'}});}
   }
 }
 export async function queueExport(

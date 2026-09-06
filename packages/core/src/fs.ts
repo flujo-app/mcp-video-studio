@@ -40,7 +40,10 @@ export async function atomicWrite(
 
 export async function readJson<T>(filePath: string): Promise<T> {
   try {
-    const handle = await open(filePath, "r");
+    const handle = await open(
+      filePath,
+      constants.O_RDONLY | (constants.O_NONBLOCK ?? 0),
+    );
     try {
       const limit = 64 * 1024 * 1024,
         info = await handle.stat();

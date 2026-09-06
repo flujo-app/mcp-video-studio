@@ -1,5 +1,5 @@
 import path from "node:path";
-import { readFile } from "node:fs/promises";
+import { readFile, realpath } from "node:fs/promises";
 import { expect, it } from "vitest";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
@@ -138,7 +138,14 @@ integration(
         .getByRole("button", { name: "Reproduce saved export", exact: true })
         .click();
       await history
-        .getByText("Saved revision reproduced: " + destination, { exact: true })
+        .getByText(
+          "Saved revision reproduced: " +
+            path.join(
+              await realpath(path.dirname(destination)),
+              path.basename(destination),
+            ),
+          { exact: true },
+        )
         .waitFor();
       expect(await readFile(destination)).toEqual(original);
       expect(await f.store.read()).toEqual(edited);

@@ -285,24 +285,34 @@ export async function inspectMedia(
   store: ProjectStore,
   mediaIds?: string[],
 ): Promise<Array<Record<string, unknown>>> {
-  const project = await store.read();
-  return Promise.all(
-    project.media
-      .filter((media) => !mediaIds || mediaIds.includes(media.id))
-      .map(async (media) => {
-        const resolvedPath = mediaPath(store, media);
-        const info = await stat(resolvedPath).catch(() => undefined);
-        const changed =
-          media.storage.mode === "linked" && info
-            ? Math.abs(info.mtimeMs - media.storage.mtimeMs) > 1
-            : false;
-        return {
-          ...media,
-          resolvedPath,
-          available: Boolean(info?.isFile()),
-          changedOnDisk: changed,
-          actualBytes: info?.size ?? null,
-        };
-      }),
-  );
+  const project = await store.read(),
+    results: Array<Record<string, unknown>> = [];
+  for (const media of project.media.filter(
+    (media) => !mediaIds || mediaIds.includes(media.id),
+  )) {
+    const resolvedPath = mediaPath(store, media),
+      info = await stat(resolvedPath).catch(() => undefined);
+    let actual: { sha256: string; bytes: number } | undefined,
+      inspectionError: string | undefined;
+    if (info?.isFile())
+      try {
+        actual = await sha256File(resolvedPath);
+      } catch (error) {
+        inspectionError =
+          error instanceof Error ? error.message : String(error);
+      }
+    results.push({
+      ...media,
+      resolvedPath,
+      available: Boolean(info?.isFile()),
+      changedOnDisk: actual
+        ? actual.sha256 !== media.storage.sha256 ||
+          actual.bytes !== media.storage.bytes
+        : Boolean(info?.isFile()),
+      actualBytes: actual?.bytes ?? info?.size ?? null,
+      ...(actual ? { actualSha256: actual.sha256 } : {}),
+      ...(inspectionError ? { inspectionError } : {}),
+    });
+  }
+  return results;
 }
