@@ -648,6 +648,24 @@ integration(
           })
           .click(),
       );
+      await expect
+        .poll(
+          async () =>
+            (await read(page)).sequences[0]!.audioMaster?.effects.find(
+              (effect) => effect.type === "loudness",
+            ),
+          {
+            message:
+              "Normalize must save the enabled final master before export; responses=" +
+              JSON.stringify(requests.slice(-5)),
+          },
+        )
+        .toMatchObject({
+          type: "loudness",
+          enabled: true,
+          parameters: { targetLufs: -16, truePeakDb: -1.5, rangeLu: 7 },
+        });
+      expect(await page.getByRole("alert").allTextContents()).toEqual([]);
       const output = path.join(root, "human-minute.mp4");
       await page.getByRole("button", { name: "Export", exact: true }).click();
       await page.getByLabel("Export output path", { exact: true }).fill(output);
