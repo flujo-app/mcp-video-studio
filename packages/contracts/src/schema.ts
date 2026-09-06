@@ -76,6 +76,7 @@ const captionSchema = z.object({
   durationTick: positiveTick,
   text: z.string().min(1).max(10_000),
   style: z.object({
+    fontMediaId:id.optional(),outlineColor:z.string().optional(),outlineWidth:z.number().finite().min(0).max(128).optional(),shadowColor:z.string().optional(),shadowOffset:z.number().finite().min(0).max(128).optional(),marginLeft:z.number().finite().min(0).max(8192).optional(),marginRight:z.number().finite().min(0).max(8192).optional(),marginVertical:z.number().finite().min(0).max(8192).optional(),
     fontFamily: z.string().min(1).max(200),
     fontSize: z.number().finite().positive().max(500),
     color: z.string().min(1),

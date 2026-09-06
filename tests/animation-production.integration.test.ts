@@ -59,6 +59,6 @@ integration("decodes bounded embedded image/video nodes and holds the source end
   const doc:AnimationDocument={id:"assets",name:"Assets",mode:"declarative",durationTick:secondsToTicks(2),seed:0,canvas:{width:32,height:16,background:"transparent"},operations:[],nodes:[node("image","image",{src:"data:image/png;base64,"+(await readFile(image)).toString("base64"),width:16,height:16},8,8),node("video","video",{src:"data:video/webm;base64,"+(await readFile(video)).toString("base64"),width:16,height:16},24,8)]};
   const output=path.join(root,"assets.mkv");await renderAnimation(doc,config,{fps:{numerator:2,denominator:1},outputPath:output});
   const raw=path.join(root,"assets.rgba");await runChecked(config.ffmpegPath,["-hide_banner","-y","-i",output,"-pix_fmt","rgba","-f","rawvideo",raw]);const bytes=await readFile(raw),frameSize=32*16*4;expect(bytes.length).toBe(frameSize*4);
-  expect(bytes[0]).toBeGreaterThan(240);expect(bytes[16*4+2]).toBeGreaterThan(240);expect(bytes.subarray(0,frameSize).equals(bytes.subarray(frameSize*3))).toBe(true);
+  if(bytes[0]!<=240)console.log("EMBEDDED_PIXEL_DIAGNOSTIC",JSON.stringify({left:[...bytes.subarray(0,4)],right:[...bytes.subarray(16*4,16*4+4)],last:[...bytes.subarray(frameSize*3,frameSize*3+4)]}));expect(bytes[0]).toBeGreaterThan(240);expect(bytes[16*4+2]).toBeGreaterThan(240);expect(bytes.subarray(0,frameSize).equals(bytes.subarray(frameSize*3))).toBe(true);
  }finally{await rm(root,{recursive:true,force:true});}
 },60000);

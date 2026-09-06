@@ -154,6 +154,14 @@ export interface Marker {
 }
 
 export interface CaptionStyle {
+  fontMediaId?: UUID;
+  outlineColor?: string;
+  outlineWidth?: number;
+  shadowColor?: string;
+  shadowOffset?: number;
+  marginLeft?: number;
+  marginRight?: number;
+  marginVertical?: number;
   fontFamily: string;
   fontSize: number;
   color: string;

@@ -10,6 +10,7 @@ export function sequenceDependencies(project:StudioProject,sequenceId:string,inc
   let depth=1;
   const sequence=byId.get(id);if(!sequence)throw new StudioException("MISSING_SEQUENCE","A nested source sequence does not exist.","input");
   sequences.add(id);
+  for(const caption of sequence.captions)if(caption.style.fontMediaId)media.add(caption.style.fontMediaId);
   for(const clip of sequence.clips){
    if(++edges>100000)throw new StudioException("NESTED_SEQUENCE_LIMIT","Sequence dependency inspection exceeds 100,000 clips.","policy");
    if(!includeDisabled&&!clip.enabled)continue;

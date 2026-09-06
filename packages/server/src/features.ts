@@ -10,8 +10,8 @@ export const featureSchemas = {
   create_sequence: z.object({...revision,name:z.string().trim().min(1).max(200),activate:z.boolean().default(true)}),
   insert_nested_sequence: z.object({...revision,sequenceId:z.string(),sourceSequenceId:z.string(),trackId:z.string(),startTick:z.number().int().nonnegative(),mode:z.enum(["insert","overwrite"]).default("insert")}),
   create_animation_preset: z.object({ ...revision, sequenceId: z.string(), trackId: z.string(), startTick: z.number().int().nonnegative(), durationTick: z.number().int().positive(), preset: z.enum(ANIMATION_PRESETS), text: z.string().min(1).max(200) }),
-  import_captions: z.object({ ...revision, sequenceId: z.string(), trackId: z.string(), format: z.enum(["srt", "vtt"]), text: z.string().max(1_000_000) }),
-  export_captions: z.object({ projectPath: z.string(), sequenceId: z.string(), format: z.enum(["srt", "vtt"]) }),
+  import_captions: z.object({ ...revision, sequenceId: z.string(), trackId: z.string(), format: z.enum(["srt", "vtt", "ass"]), text: z.string().max(1_000_000) }),
+  export_captions: z.object({ projectPath: z.string(), sequenceId: z.string(), format: z.enum(["srt", "vtt", "ass"]) }),
   adopt_generated_media: z.object({ ...revision, sequenceId: z.string(), clipId: z.string(), mediaId: z.string(), kind: z.enum(["narration", "music"]), name: z.string().min(1).max(300), artifactId: z.string().optional(), note: z.string().max(10000).optional() }),
   compare_generated_versions: z.object({ projectPath: z.string(), artifactId: z.string(), firstVersionId: z.string(), secondVersionId: z.string() }),
   annotate_generated_version: z.object({ ...revision, artifactId: z.string(), versionId: z.string(), reviewer: z.string().min(1).max(300), note: z.string().max(10000) })
@@ -38,7 +38,7 @@ export async function invokeFeature(runtime: StudioRuntime, name: FeatureName, v
   if (name === "export_captions") {
     const p = featureSchemas.export_captions.parse(input), sequence = project.sequences.find(s => s.id === p.sequenceId);
     if (!sequence) fail("Sequence not found.");
-    return { success: true, format: p.format, mimeType: p.format === "vtt" ? "text/vtt" : "application/x-subrip", text: serializeCaptions(sequence.captions, p.format) };
+    return { success: true, format: p.format, mimeType: p.format === "vtt" ? "text/vtt" : p.format==="ass"?"text/x-ssa":"application/x-subrip", text: serializeCaptions(sequence.captions, p.format, project.settings.raster) };
   }
   if (name === "compare_generated_versions") {
     const p = featureSchemas.compare_generated_versions.parse(input), artifact = project.generatedArtifacts.find(a => a.id === p.artifactId);
@@ -72,7 +72,7 @@ export async function invokeFeature(runtime: StudioRuntime, name: FeatureName, v
   if (name === "import_captions") {
     const p = featureSchemas.import_captions.parse(input), sequence = project.sequences.find(s => s.id === p.sequenceId);
     if (!sequence?.tracks.some(t => t.id === p.trackId && t.type === "caption" && !t.locked)) fail("Select an unlocked caption track.");
-    const captions = parseCaptions(p.text, p.format, p.trackId, project.settings.fps, { fontFamily: "Arial", fontSize: Math.round(54 * project.settings.raster.height / 1080), color: "#ffffff", background: "#000000aa", position: "bottom", align: "center" });
+    const captions = parseCaptions(p.text, p.format, p.trackId, project.settings.fps, { fontFamily: "Arial", fontSize: Math.round(54 * project.settings.raster.height / 1080), color: "#ffffff", background: "#000000aa", position: "bottom", align: "center" },project.settings.raster);
     if (!captions.length) fail("No captions found.");
     return runtime.apply(p.projectPath, p.expectedRevision, captions.map(caption => ({ type: "caption.add", sequenceId: sequence.id, caption })));
   }

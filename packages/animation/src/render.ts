@@ -10,7 +10,7 @@ import { animationProblems } from "@mcp-video-studio/contracts";
 import { createAnimationPainter } from "./painter.js";
 import { evaluateAnimation } from "./evaluate.js";
 
-export const ANIMATION_RENDERER_VERSION=5;
+export const ANIMATION_RENDERER_VERSION=6;
 
 const RENDERER_HTML = '<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:transparent}canvas{display:block}</style></head><body><canvas id="canvas"></canvas><script>window.__applyState=('+createAnimationPainter.toString()+')(document.getElementById("canvas"));</script></body></html>';
 
@@ -71,7 +71,7 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
       options.onProgress?.((frame + 1) / (frameCount + 1));
     }
     const fpsText = `${options.fps.numerator}/${options.fps.denominator}`;
-    await ffmpegArtifact(config, ["-framerate", fpsText, "-start_number", "0", "-i", path.join(frames, "%08d.png"), "-frames:v", String(frameCount), "-c:v", "ffv1", "-level", "3", "-pix_fmt", "bgra"], options.outputPath, { signal: options.signal, timeoutMs: 12 * 60 * 60_000 });
+    await ffmpegArtifact(config, ["-framerate", fpsText, "-start_number", "0", "-i", path.join(frames, "%08d.png"), "-frames:v", String(frameCount), "-c:v", "ffv1", "-level", "3", "-pix_fmt", "gbrap16le"], options.outputPath, { signal: options.signal, timeoutMs: 12 * 60 * 60_000 });
     options.onProgress?.(1);
     return { outputPath: path.resolve(options.outputPath), frameCount, durationTick: frameCount * perFrame, ...(await sha256File(options.outputPath)) };
   } catch(error) {

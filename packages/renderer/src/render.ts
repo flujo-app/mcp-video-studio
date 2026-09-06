@@ -210,7 +210,7 @@ function fadeFilters(sequence:Sequence,clip:Clip):string[]{
 }
 
 
-function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: InputSpec[], captionFiles: Map<string, string>, maxWidth?: number, defaultFontFile?: string, pass: {video?:boolean;audio?:boolean;range?:{startTick:number;endTick:number};cachedVideoInput?:number;cachedAudioInput?:number} = {}): { graph: string; videoLabel: string; audioLabel: string; durationTick: number; frameCount: number } {
+function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: InputSpec[], captionFiles: Map<string, string>, maxWidth?: number, defaultFontFile?: string, pass: {video?:boolean;audio?:boolean;range?:{startTick:number;endTick:number};cachedVideoInput?:number;cachedAudioInput?:number;captionFonts?:Map<string,string>} = {}): { graph: string; videoLabel: string; audioLabel: string; durationTick: number; frameCount: number } {
   const durationTick = pass.range?pass.range.endTick-pass.range.startTick:sequenceDuration(sequence);
   if (durationTick <= 0) throw new StudioException("EMPTY_SEQUENCE", "The sequence has no renderable duration.", "input");
   const frameCount = ticksToFrames(durationTick, project.settings.fps, "ceil");
@@ -274,12 +274,12 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
   captions.forEach((caption, captionIndex) => {
     const start = ticksToSeconds(caption.startTick);
     const finish = ticksToSeconds(caption.startTick + caption.durationTick);
-    const x = caption.style.align === "left" ? "w*0.05" : caption.style.align === "right" ? "w-text_w-w*0.05" : "(w-text_w)/2";
-    const y = caption.style.position === "top" ? "h*0.07" : caption.style.position === "center" ? "(h-text_h)/2" : "h-text_h-h*0.08";
+    const x = caption.style.align === "left" ? String(caption.style.marginLeft??width*.05) : caption.style.align === "right" ? "w-text_w-"+(caption.style.marginRight??width*.05) : "(w-text_w)/2";
+    const y = caption.style.position === "top" ? String(caption.style.marginVertical??height*.07) : caption.style.position === "center" ? "(h-text_h)/2" : "h-text_h-"+(caption.style.marginVertical??height*.08);
     const next = `caption${captionIndex}`;
     const textFile = captionFiles.get(caption.id);
     if (!textFile) throw new StudioException("CAPTION_TEXT_MISSING", `Caption text file missing for ${caption.id}.`, "runtime");
-    statements.push(`[${videoLabel}]drawtext=fontfile='${escapeFilterPath(captionFontFile(caption.style.fontFamily, defaultFontFile))}':textfile='${escapeFilterPath(textFile)}':reload=0:expansion=none:fontsize=${caption.style.fontSize}:fontcolor=${ffmpegCaptionColor(caption.style.color)}:box=1:boxcolor=${ffmpegCaptionColor(caption.style.background)}:boxborderw=18:x=${x}:y=${y}:enable='gte(t,${start})*lt(t,${finish})'[${next}]`);
+    statements.push(`[${videoLabel}]drawtext=fontfile='${escapeFilterPath(pass.captionFonts?.get(caption.id)??captionFontFile(caption.style.fontFamily, defaultFontFile))}':textfile='${escapeFilterPath(textFile)}':reload=0:expansion=none:fontsize=${caption.style.fontSize}:fontcolor=${ffmpegCaptionColor(caption.style.color)}:box=1:boxcolor=${ffmpegCaptionColor(caption.style.background)}:boxborderw=18:borderw=${caption.style.outlineWidth??0}:bordercolor=${ffmpegCaptionColor(caption.style.outlineColor??"#000000")}:shadowcolor=${ffmpegCaptionColor(caption.style.shadowColor??"#000000")}:shadowx=${caption.style.shadowOffset??0}:shadowy=${caption.style.shadowOffset??0}:x=${x}:y=${y}:enable='gte(t,${start})*lt(t,${finish})'[${next}]`);
     videoLabel = next;
   });
 
@@ -365,7 +365,7 @@ async function continuousAudio(project:StudioProject,sequence:Sequence,store:Pro
   clips:clips.map(({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})=>({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})),
   tracks:sequence.tracks.map(({id,type,muted,solo,gainDb,pan,effects})=>({id,type,muted,solo,gainDb,pan,effects})),
   automation:sequence.automation,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
-  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:13,animationRenderer:ANIMATION_RENDERER_VERSION});
+  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:14,animationRenderer:ANIMATION_RENDERER_VERSION});
  const cached=confinedPath(store.root,path.join(store.root,"cache","renders","audio-"+key+".wav"));
  let hit=false;try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
  if(!hit){
@@ -385,10 +385,10 @@ function nestedFingerprint(project:StudioProject,clips:Clip[],mediaHashes:Map<st
   const dependencies=sequenceDependencies(project,clip.source.sequenceId);
   for(const id of dependencies.sequences)sequences.add(id);for(const id of dependencies.media)media.add(id);for(const id of dependencies.animations)animations.add(id);
  }
- return{sequences:project.sequences.filter(sequence=>sequences.has(sequence.id)),media:[...media].map(id=>({id,sha256:mediaHashes.get(id)})),animations:project.animations.filter(animation=>animations.has(animation.id))};
+ return{captionFonts:project.sequences.filter(sequence=>sequences.has(sequence.id)).flatMap(sequence=>sequence.captions.map(caption=>({id:caption.id,hash:mediaHashes.get("caption-font:"+caption.id)}))),sequences:project.sequences.filter(sequence=>sequences.has(sequence.id)),media:[...media].map(id=>({id,sha256:mediaHashes.get(id)})),animations:project.animations.filter(animation=>animations.has(animation.id))};
 }
 interface CachedRange{startTick:number;endTick:number;renderKey:string;cacheHit:boolean}
-async function videoRanges(project:StudioProject,sequence:Sequence,store:ProjectStore,config:StudioConfig,options:RenderOptions,scratch:string,captionFiles:Map<string,string>,mediaHashes:Map<string,string>){
+async function videoRanges(project:StudioProject,sequence:Sequence,store:ProjectStore,config:StudioConfig,options:RenderOptions,scratch:string,captionFiles:Map<string,string>,mediaHashes:Map<string,string>,captionFonts:Map<string,string>){
  const totalFrames=ticksToFrames(sequenceDuration(sequence),project.settings.fps,"ceil");
  const rangeFrames=Math.max(options.videoRangeFrames??Math.max(1,Math.round(10*project.settings.fps.numerator/project.settings.fps.denominator)),Math.ceil(totalFrames/3600));
  const ranges:CachedRange[]=[],list:string[]=[];
@@ -405,18 +405,18 @@ async function videoRanges(project:StudioProject,sequence:Sequence,store:Project
    nested:nestedFingerprint(project,owned,mediaHashes),
    startTick,endTick,clips:owned.map(({name,audio,groupId,linkedGroupId,...clip})=>clip),
    tracks:sequence.tracks.filter(track=>owned.some(clip=>clip.trackId===track.id)||captions.some(caption=>caption.trackId===track.id)).map(({id,order,hidden,muted,type})=>({id,order,hidden,muted:type==="caption"?muted:undefined})),
-   captions,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
+   captionFonts:captions.map(caption=>({id:caption.id,hash:mediaHashes.get("caption-font:"+caption.id)})),captions,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
    settings:{raster:project.settings.raster,fps:project.settings.fps,background:project.settings.background,colorSpace:project.settings.colorSpace},
    media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),
    animations:project.animations.filter(animation=>animationIds.has(animation.id)),
-   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:13,animationRenderer:ANIMATION_RENDERER_VERSION
+   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:14,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cached=confinedPath(store.root,path.join(store.root,"cache","renders","video-"+key+".mkv"));
   let hit=false;
   try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
   if(!hit){
    const inputs=await buildInputs(project,rangeSequence,store,config,options.signal,options.onProgress,{audio:false,scratch});
-   const compiled=buildFilterGraph(project,rangeSequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{audio:false,range:{startTick,endTick}});
+   const compiled=buildFilterGraph(project,rangeSequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{audio:false,range:{startTick,endTick},captionFonts});
    const graphPath=path.join(scratch,"range-"+ranges.length+".txt");await writeFile(graphPath,compiled.graph,"utf8");
    await ffmpegArtifact(config,[...inputs.flatMap(input=>input.args),await filterScriptOption(config.ffmpegPath),graphPath,"-map","["+compiled.videoLabel+"]","-frames:v",String(compiled.frameCount),"-c:v","ffv1","-level","3","-an"],cached,{signal:options.signal,timeoutMs:60*60_000});
    await writeJson(cached+".json",await sha256File(cached));
@@ -448,17 +448,23 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
    if(samePath(source,options.outputPath))throw new StudioException("SOURCE_OUTPUT_OVERWRITE","Export cannot overwrite a project media source.","input");
    mediaHashes.set(media.id,(await sha256File(source,options.signal)).sha256);
   }
+  const captionFonts=new Map<string,string>();
+  if(preset.container!=="wav")for(const owner of project.sequences.filter(owner=>dependencies.sequences.has(owner.id)))for(const caption of owner.captions){
+   const font=caption.style.fontMediaId?mediaPath(store,mediaById(project,caption.style.fontMediaId)):captionFontFile(caption.style.fontFamily,config.defaultFontFile);
+   if(samePath(font,options.outputPath))throw new StudioException("SOURCE_OUTPUT_OVERWRITE","Export cannot overwrite a caption font.","input");
+   captionFonts.set(caption.id,font);mediaHashes.set("caption-font:"+caption.id,(await sha256File(font,options.signal)).sha256);
+  }
   confinedPath(store.root,path.join(store.root,"cache","renders"));
 
   const renderKey = canonicalHash({
-    sequence,
+    captionFonts:[...captionFonts.keys()].map(id=>({id,hash:mediaHashes.get("caption-font:"+id)})),sequence,
     nested:project.sequences.filter(child=>child.id!==sequence.id&&dependencies.sequences.has(child.id)),
     settings: project.settings,
     preset,
     media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: mediaHashes.get(asset.id), offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
     output: { videoRangeFrames:options.videoRangeFrames??null, maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
-    renderer: 13,animationRenderer:ANIMATION_RENDERER_VERSION
+    renderer: 14,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cachePath = confinedPath(store.root,path.join(store.root,"cache","renders",renderKey+"."+preset.container));
   const durationTick = sequenceDuration(sequence);
@@ -492,7 +498,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
   await mkdir(scratch, { recursive: true });
   try {
     options.onProgress?.(0.01, "Planning render");
-    if(sequence.captions.length)await requireFfmpegFilters(config.ffmpegPath,["drawtext"]);
+    if(preset.container!=="wav"&&sequence.captions.length)await requireFfmpegFilters(config.ffmpegPath,["drawtext"]);
     const audioOnly = preset.container === "wav";
 
     const captionFiles = new Map<string, string>();
@@ -502,11 +508,11 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
       captionFiles.set(caption.id, textPath);
     }));
     const useRanges=!audioOnly&&options.videoRangeFrames!==0&&(options.videoRangeFrames!==undefined||ticksToSeconds(durationTick)>30||sequence.clips.filter(clip=>visualClip(project,sequence,clip)).length>32);
-    const cachedVideo=useRanges?await videoRanges(project,sequence,store,config,options,scratch,captionFiles,mediaHashes):undefined;
+    const cachedVideo=useRanges?await videoRanges(project,sequence,store,config,options,scratch,captionFiles,mediaHashes,captionFonts):undefined;
     const cachedAudio=cachedVideo?await continuousAudio(project,sequence,store,config,options,scratch,mediaHashes):undefined;
     const inputSequence=cachedVideo?{...sequence,clips:[]}:audioOnly?{...sequence,clips:sequence.clips.filter(clip=>audibleClip(project,clip))}:sequence;
     const inputs=await buildInputs(project,inputSequence,store,config,options.signal,options.onProgress,{video:!audioOnly,scratch});
-    const compiled = buildFilterGraph(project,sequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{video:!audioOnly&&!cachedVideo,audio:!cachedAudio,...(cachedVideo?{cachedVideoInput:inputs.length}:{}),...(cachedAudio?{cachedAudioInput:inputs.length+1}:{})});
+    const compiled = buildFilterGraph(project,sequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{captionFonts,video:!audioOnly&&!cachedVideo,audio:!cachedAudio,...(cachedVideo?{cachedVideoInput:inputs.length}:{}),...(cachedAudio?{cachedAudioInput:inputs.length+1}:{})});
     const graphPath = path.join(scratch, "filter-complex.txt");
     await writeFile(graphPath, compiled.graph, "utf8");
     const inputArgs = [...inputs.flatMap((input) => input.args),...(cachedVideo?.args??[]),...(cachedAudio?.args??[])];
@@ -534,6 +540,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     const [probe, hash] = await Promise.all([probeMedia(stagedOutput, config, options.signal), sha256File(stagedOutput,options.signal)]);
     if(!probe.hasAudio||!audioOnly&&!probe.hasVideo||Math.abs(probe.durationTick-outputDurationTick)>Math.max(ticksPerFrame(project.settings.fps),ticksPerSample(project.settings.sampleRate)))throw new StudioException("INVALID_RENDER_OUTPUT","Rendered streams or duration do not match the requested sequence.","runtime");
     for(const media of project.media.filter(asset=>mediaHashes.has(asset.id)))if((await sha256File(mediaPath(store,media),options.signal)).sha256!==mediaHashes.get(media.id))throw new StudioException("SOURCE_CHANGED_DURING_RENDER","A media source changed during rendering. The previous export was preserved; retry after the source is stable.","conflict");
+    for(const [id,font]of captionFonts)if((await sha256File(font,options.signal)).sha256!==mediaHashes.get("caption-font:"+id))throw new StudioException("SOURCE_CHANGED_DURING_RENDER","A caption font changed during rendering. Retry with stable font assets.","conflict");
     await publishFile(stagedOutput, cachePath);
     await writeFile(`${cachePath}.json`, `${JSON.stringify({ renderKey, projectId: project.projectId, sequenceId: sequence.id, createdAt: new Date().toISOString(), presetId: preset.id, frameCount: compiled.frameCount, durationTick: outputDurationTick, sha256: hash.sha256, bytes: hash.bytes }, null, 2)}\n`, "utf8");
     await rename(stagedOutput,output);

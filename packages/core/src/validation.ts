@@ -31,6 +31,7 @@ export function validateProject(project: StudioProject): StudioProject {
   for (const sequence of normalized.sequences) {
     sequenceDependencies(normalized,sequence.id,true);
     prepareTransitionTimeline(normalized,sequence);
+    for(const caption of sequence.captions)if(caption.style.fontMediaId&&!normalized.media.some(media=>media.id===caption.style.fontMediaId&&media.kind==="font"))throw new StudioException("MISSING_CAPTION_FONT","Caption font must reference an imported font asset.","input");
     const clips = new Map(sequence.clips.map((clip) => [clip.id, clip]));
     for (const clip of sequence.clips) {
       const track = sequence.tracks.find((item) => item.id === clip.trackId);
@@ -43,6 +44,7 @@ export function validateProject(project: StudioProject): StudioProject {
       let sourceDuration:number|undefined;
       if(clip.source.type==="media"){
         const source=normalized.media.find(item=>clip.source.type==="media"&&item.id===clip.source.mediaId);
+        if(source&&["font","subtitle"].includes(source.kind))throw new StudioException("NON_TIMELINE_MEDIA","Font/subtitle assets belong in caption styles or caption import, not AV clips.","input");
         if(source&&source.kind!=="image")sourceDuration=source.probe.durationTick;
       }else if(clip.source.type==="animation")sourceDuration=normalized.animations.find(item=>clip.source.type==="animation"&&item.id===clip.source.animationId)?.durationTick;
       if(clip.source.type==="sequence"){const source=normalized.sequences.find(item=>clip.source.type==="sequence"&&item.id===clip.source.sequenceId);if(source)sourceDuration=framesToTicks(ticksToFrames(sequenceDuration(source),normalized.settings.fps,"ceil"),normalized.settings.fps);}

@@ -15,7 +15,11 @@
     "REMEDIATION.md",
     "ROADMAP.md",
     "TECHNICAL_PLAN.md",
-    "GENERATION.md"
+    "GENERATION.md",
+    "CAPTIONS.md",
+    "ANIMATION.md",
+    "NESTING.md",
+    "RENDER_CACHE.md"
   ],
   "workspaces": [
     "packages/*"

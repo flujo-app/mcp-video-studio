@@ -1,3 +1,4 @@
+import {probeFont} from "./fonts.js";
 import path from "node:path";
 import { rational, secondsToTicks, type MediaKind, type MediaProbe, type Rational } from "@mcp-video-studio/contracts";
 import { StudioException } from "@mcp-video-studio/core";
@@ -37,6 +38,7 @@ function firstFinite(...values: Array<string | undefined>): number {
 }
 
 export async function probeMedia(filePath: string, config: StudioConfig, signal?: AbortSignal): Promise<MediaProbe> {
+  if([".ttf",".otf",".woff",".woff2",".ttc"].includes(path.extname(filePath).toLowerCase()))return probeFont(filePath);
   const result = await runChecked(config.ffprobePath, ["-protocol_whitelist", "file,pipe,data", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path.resolve(filePath)], { signal, timeoutMs: 60_000 });
   let data: FfprobeJson;
   try { data = JSON.parse(result.stdout) as FfprobeJson; }
