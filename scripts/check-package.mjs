@@ -17,7 +17,7 @@ try{
   try{
    await client.connect(transport);assert.equal(client.getProtocolEra(),mode==="auto"?"modern":"legacy");
    assert.equal(client.getServerVersion()?.version,manifest.version);
-   const catalog=await client.listTools();for(const name of ["slip_clip","edit_animation","import_captions","export_project_archive"])assert(catalog.tools.some(tool=>tool.name===name));
+   const catalog=await client.listTools();for(const name of ["slip_clip","edit_animation","import_captions","export_project_archive","set_clip_mask"])assert(catalog.tools.some(tool=>tool.name===name));
    if(!projectPath){const result=await client.callTool({name:"create_project",arguments:{name:"Packed persistence"}});assert(!result.isError);projectPath=result.structuredContent.projectPath;}
    const result=await client.callTool({name:"get_project",arguments:{projectPath}});assert.equal(result.structuredContent.project.name,"Packed persistence");
    const resource=await client.readResource({uri:"ui://mcp-video-studio/studio-v1.html"});assert.equal(resource.contents[0].mimeType,"text/html;profile=mcp-app");
@@ -27,6 +27,6 @@ try{
  }
  // EOF must close the gateway/process without relying on transport force-kill.
  await new Promise((resolve,reject)=>{const child=spawn(process.execPath,[entry,"--stdio"],{env,stdio:["pipe","ignore","pipe"]}),timer=setTimeout(()=>{child.kill();reject(new Error("Packed stdio process did not exit on EOF"));},10000);child.once("error",reject);child.once("exit",code=>{clearTimeout(timer);code===0?resolve():reject(new Error("EOF exit "+code));});child.stdin.end();});
- if(process.env.RUN_BROWSER_INTEGRATION==="1")await command(npm,["exec","--","vitest","run","tests/studio-browser.integration.test.ts","tests/export-browser.integration.test.ts"],{...process.env,STUDIO_TEST_ENTRY:entry});
+ if(process.env.RUN_BROWSER_INTEGRATION==="1")await command(npm,["exec","--","vitest","run","tests/studio-browser.integration.test.ts","tests/export-browser.integration.test.ts","tests/video-mask-browser.integration.test.ts"],{...process.env,STUDIO_TEST_ENTRY:entry});
  console.log(JSON.stringify({package:packed.filename,integrity:packed.integrity,installedArtifact:true,stdioEof:true,browser:process.env.RUN_BROWSER_INTEGRATION==="1"}));
 }finally{await rm(temp,{recursive:true,force:true});}

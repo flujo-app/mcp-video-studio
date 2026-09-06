@@ -1,3 +1,4 @@
+import {MaskParametersSchema} from "@mcp-video-studio/contracts";
 import {sequenceDependencies} from "./nesting.js";
 import { framesToTicks, ticksToFrames, animationProblems, StudioProjectSchema, ticksPerSample, ticksPerFrame, type Clip, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import {prepareTransitionTimeline} from "./transitions.js";
@@ -34,6 +35,7 @@ export function validateProject(project: StudioProject): StudioProject {
     for(const caption of sequence.captions)if(caption.style.fontMediaId&&!normalized.media.some(media=>media.id===caption.style.fontMediaId&&media.kind==="font"))throw new StudioException("MISSING_CAPTION_FONT","Caption font must reference an imported font asset.","input");
     const clips = new Map(sequence.clips.map((clip) => [clip.id, clip]));
     for (const clip of sequence.clips) {
+      for(const effect of clip.effects.filter(effect=>effect.type==="mask"))if(!MaskParametersSchema.safeParse(effect.parameters).success)throw new StudioException("INVALID_MASK","Mask requires bounded rectangle/ellipse geometry and scalar controls.","input");
       const track = sequence.tracks.find((item) => item.id === clip.trackId);
       if (!track) continue;
       if ((track.type === "video" || track.type === "overlay" || track.type === "caption") && (clip.startTick % frameTick !== 0 || clip.durationTick % frameTick !== 0)) {

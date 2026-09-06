@@ -1,4 +1,6 @@
-export const VIDEO_EFFECTS_VERSION=2;
+import {preserveEffectAlpha} from "./alpha.js";
+import {maskFilters} from "./masks.js";
+export const VIDEO_EFFECTS_VERSION=3;
 import type { Clip, EffectInstance } from "@mcp-video-studio/contracts";
 import { StudioException } from "@mcp-video-studio/core";
 function bounded(value:unknown,fallback:number,min:number,max:number):number{
@@ -18,11 +20,13 @@ export function atempoChain(rate:number):string[]{
  while(value>2){filters.push("atempo=2");value/=2;}while(value<.5){filters.push("atempo=0.5");value/=.5;}
  if(Math.abs(value-.5)<1e-9)filters.push("atempo=0.5");else if(Math.abs(value-2)<1e-9)filters.push("atempo=2");else if(Math.abs(value-1)>1e-9)filters.push("atempo="+value.toFixed(8));return filters;
 }
-export function videoEffectFilters(effects:EffectInstance[]):string[]{
+export function videoEffectFilters(effects:EffectInstance[],maskPrefix="mask"):string[]{
  const result:string[]=[];
- for(const effect of effectsOf(effects)){
+ for(const [index,effect] of effectsOf(effects).entries()){
+  const first=result.length;
   const p=effect.parameters;
   switch(effect.type){
+   case "mask":break; // Clip visibility is evaluated after color processing.
    case "color":result.push("eq=brightness="+bounded(p.brightness,0,-1,1)+":contrast="+bounded(p.contrast,1,0,10)+":saturation="+bounded(p.saturation,1,0,3));break;
    case "brightness":result.push("eq=brightness="+bounded(p.value,0,-1,1));break;
    case "blur":result.push("gblur=sigma="+bounded(p.radius,4,0,100));break;
@@ -34,7 +38,8 @@ export function videoEffectFilters(effects:EffectInstance[]):string[]{
    case "vflip":result.push("vflip");break;
    default:unsupported(effect.type);
   }
- }return result;
+  if(result.length>first&&!["hflip","vflip"].includes(effect.type)){const colorFilters=result.splice(first);result.push(...preserveEffectAlpha(colorFilters,maskPrefix+"effect_"+index,{key:effect.type==="chromaKey",...(effect.type==="blur"?{alphaFilters:colorFilters}:{})}));}
+ }for(const [index,effect] of effectsOf(effects).entries())if(effect.type==="mask")result.push(...maskFilters(effect.parameters,maskPrefix+"_"+index));return result;
 }
 export function audioEffectFilters(effects:EffectInstance[],sampleRate=48000):string[]{
  const result:string[]=[],enabled=effectsOf(effects);

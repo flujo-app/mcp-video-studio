@@ -23,3 +23,9 @@ Vignette's default spatial dither changes its random state when a new cached ran
 `tests/video-output-timing.integration.test.ts` verifies 31 actual encoded packets, decoded frames and raw RGB frames at 12,24 and 30000/1001 fps, both whole and 7-frame ranges. It also compares every lossless whole/range pixel. Range offsets and trims use integer frame PTS rather than decimal seconds. Final video encoding sets an explicit rational output rate and CFR mode; a mismatched encoded rate is rejected before publication. GIF has its own centisecond timing contract in the export-format documentation.
 
 The original transform/transition gates additionally verify crop, scale, rotation/anchor, alpha/blend, source-handle-checked crossfades/wipes, fractional source rates and constant speeds. LUTs, geometric masks and time-remapping operations require their own independent fixtures as they are added. They are not covered by the nine-effect table.
+
+## Transparency and geometric masks
+
+Renderer effect version 3 invalidates older cached color processing. Color adjustments, sharpening and vignette retain the incoming alpha channel exactly; Gaussian blur processes alpha with the same spatial kernel, flips move all channels together, and chroma-key coverage multiplies the original alpha. This prevents vignette/key processing from making partially transparent clips opaque. The real RGBA regression covers an alpha gradient, blur geometry and keyed coverage; the nine-effect whole/range and measured H264 preview/final parity matrix remains enabled.
+
+Rectangle and ellipse masks apply as a final clip visibility stage. Their scalar geometry, feather, inversion, opacity, Studio controls and typed MCP edit are described in [MASKS.md](MASKS.md).

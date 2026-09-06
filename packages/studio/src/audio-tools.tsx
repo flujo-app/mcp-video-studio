@@ -1,3 +1,4 @@
+import {ClipMaskControls} from "./mask-controls.js";
 import React,{useState} from "react";
 import {AudioRangeControls,DuckingControls} from "./audio-range-controls.js";
 import {AUDIO_FIELDS, type StudioProject,secondsToTicks,ticksToSeconds,type Clip,type EffectInstance,type ProjectCommand,type Sequence} from "@mcp-video-studio/contracts";
@@ -38,6 +39,7 @@ export function ClipAudioTools({project,clip,sequence,onMutate}:{project:StudioP
  <button onClick={()=>patch({...clip.audio,effects:[makeEffect("highpass"),makeEffect("compressor"),makeEffect("deesser"),makeEffect("limiter")]})}>Apply dialogue chain</button></fieldset>
  <AudioRangeControls project={project} sequence={sequence} targetType="clip" targetId={clip.id} onMutate={onMutate}/>
  <EffectStack effects={clip.audio.effects} kind="audio" label="Clip audio" onChange={effects=>patch({...clip.audio,effects})}/>
+ <ClipMaskControls clip={clip} sequence={sequence} onMutate={onMutate}/>
  <EffectStack effects={clip.effects} kind="video" label="Clip video" onChange={effects=>void onMutate([{type:"clip.update",sequenceId:sequence.id,clipId:clip.id,patch:{effects}}])}/>
  </>;
 }

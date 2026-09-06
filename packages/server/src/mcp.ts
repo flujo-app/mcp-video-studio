@@ -1,3 +1,4 @@
+import {registerMaskTools} from "./mask-tools.js";
 import {exportOptionsSchema,parseExportOptions} from "./export-options.js";
 import {ticksPerSample,copyClipSelection,pasteClipSelection,type Sequence} from "@mcp-video-studio/contracts";
 import {listExportHistory,getExportHistory,queueExport} from './provenance.js';
@@ -32,6 +33,7 @@ async function invoke(operation: () => Promise<Record<string, unknown>>) {
 
 export function createMcpServer(runtime: StudioRuntime, gateway: Gateway): McpServer {
   const server = new McpServer({ name: "mcp-video-studio", version: manifest.version });
+  registerMaskTools(server,runtime);
   const projectRevision = { projectPath: z.string().min(1), expectedRevision: z.number().int().nonnegative() };
   const captionStyle = z.object({ fontFamily: z.string().min(1), fontSize: z.number().positive(), color: z.string().min(1), background: z.string().min(1), position: z.enum(["top", "center", "bottom"]), align: z.enum(["left", "center", "right"]) });
   const generationScope = { ...projectRevision, autoActivate: z.boolean().optional(), sequenceId: z.string(), trackId: z.string(), clipId: z.string().optional(), startTick: z.number().int().nonnegative(), durationTick: z.number().int().positive(), name: z.string().min(1) };

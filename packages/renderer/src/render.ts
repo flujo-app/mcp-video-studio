@@ -259,7 +259,7 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
       `fps=${fps}`,
       "trim=start_pts="+ticksToFrames(startTick,project.settings.fps)+":end_pts="+ticksToFrames(finishTick,project.settings.fps),
       ...transform.filters,
-      ...videoEffectFilters(clip.effects),
+      ...videoEffectFilters(clip.effects,"vmask"+visualIndex),
       ...fadeFilters(sequence, clip)
     ];
     const clipLabel = `vclip${visualIndex}`;
