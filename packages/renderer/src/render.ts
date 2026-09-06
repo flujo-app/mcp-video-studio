@@ -225,7 +225,18 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
     const clipLabel = `vclip${visualIndex}`;
     statements.push(`[${input.inputIndex}:v]${filters.join(",")}[${clipLabel}]`);
     const next = `base${visualIndex + 1}`;
+    if(clip.blendMode==="normal"){
     statements.push(`[${videoLabel}][${clipLabel}]overlay=x=${transform.x}:y=${transform.y}:eof_action=pass:shortest=0[${next}]`);
+    }else{
+      const tag="blend"+visualIndex;
+      statements.push("color=c=black@0:s="+width+"x"+height+":r="+fps+":d="+durationSeconds+",format=rgba["+tag+"empty]");
+      statements.push("["+tag+"empty]["+clipLabel+"]overlay=x="+transform.x+":y="+transform.y+":eof_action=pass:shortest=0:format=auto,format=rgba,split["+tag+"rgb]["+tag+"alpha]");
+      statements.push("["+tag+"alpha]alphaextract,format=gbrp["+tag+"mask]");
+      statements.push("["+tag+"rgb]format=gbrp["+tag+"foreground]");
+      statements.push("["+videoLabel+"]format=gbrp,split["+tag+"original]["+tag+"under]");
+      statements.push("["+tag+"under]["+tag+"foreground]blend=all_mode="+clip.blendMode+"["+tag+"result]");
+      statements.push("["+tag+"original]["+tag+"result]["+tag+"mask]maskedmerge=planes=7["+next+"]");
+    }
     videoLabel = next;
   });
 
@@ -252,27 +263,42 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
     return track && !track.muted && (!anySolo || track.solo) && !input.clip.audio.muted;
   })());
   const audioLabels: string[] = [];
+  const trackLabels=new Map<string,string[]>();
   audioInputs.forEach((input, audioIndex) => {
     const clip = input.clip;
     const track = sequence.tracks.find((candidate) => candidate.id === clip.trackId)!;
+    if((track.effects??[]).some(effect=>effect.enabled&&effect.type==="loudness")&&clip.audio.effects.some(effect=>effect.enabled&&effect.type==="loudness"))throw new StudioException("DUPLICATE_NORMALIZATION","Use loudness normalization on the clip or its track, not both.","input");
     const rate = clip.playbackRate.numerator / clip.playbackRate.denominator;
     const filters = [
       `atrim=start=${ticksToSeconds(clip.sourceInTick)}:duration=${ticksToSeconds(Math.round(clip.durationTick * rate))}`,
       "asetpts=PTS-STARTPTS",
       `aformat=sample_rates=${project.settings.sampleRate}:channel_layouts=${project.settings.channels === 1 ? "mono" : project.settings.channels === 6 ? "5.1" : "stereo"}`,
       ...atempoChain(rate),
-      `volume=${clip.audio.gainDb + track.gainDb}dB`,
-      ...(project.settings.channels === 2 ? [`stereotools=balance_out=${Math.max(-1, Math.min(1, clip.audio.pan + track.pan))}`] : []),
+      `volume=${clip.audio.gainDb}dB`,
+      ...(project.settings.channels === 2 ? [`stereotools=balance_out=${Math.max(-1, Math.min(1, clip.audio.pan))}`] : []),
       ...(clip.audio.fadeInTick > 0 ? [`afade=t=in:st=0:d=${ticksToSeconds(clip.audio.fadeInTick)}`] : []),
       ...(clip.audio.fadeOutTick > 0 ? [`afade=t=out:st=${Math.max(0, ticksToSeconds(clip.durationTick - clip.audio.fadeOutTick))}:d=${ticksToSeconds(clip.audio.fadeOutTick)}`] : []),
-      ...audioEffectFilters([...trackEffects(track), ...clip.audio.effects]),
+      ...audioEffectFilters(clip.audio.effects,project.settings.sampleRate),
       ...audioAutomationFilters(project, sequence, clip),
       `adelay=${Math.round(clip.startTick / ticksPerSample(project.settings.sampleRate))}S:all=1`
     ];
     const label = `aclip${audioIndex}`;
     statements.push(`[${input.inputIndex}:a]${filters.join(",")}[${label}]`);
-    audioLabels.push(`[${label}]`);
+    const owned=trackLabels.get(track.id)??[];trackLabels.set(track.id,owned);
+    owned.push(`[${label}]`);
   });
+  for(const [trackId,labels] of trackLabels){
+    const track=sequence.tracks.find(item=>item.id===trackId)!;
+    const label="atrack"+audioLabels.length;
+    const filters=[
+      "amix=inputs="+labels.length+":duration=longest:normalize=0",
+      "volume="+track.gainDb+"dB",
+      ...(project.settings.channels===2?["stereotools=balance_out="+track.pan]:[]),
+      ...audioEffectFilters(track.effects??[],project.settings.sampleRate)
+    ];
+    statements.push(labels.join("")+filters.join(",")+"["+label+"]");
+    audioLabels.push("["+label+"]");
+  }
   let audioLabel = "aout";
   if (audioLabels.length > 0) statements.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest:normalize=0,atrim=duration=${durationSeconds},apad=whole_dur=${durationSeconds}[${audioLabel}]`);
   else statements.push(`anullsrc=r=${project.settings.sampleRate}:cl=${project.settings.channels === 1 ? "mono" : "stereo"},atrim=duration=${durationSeconds}[${audioLabel}]`);
@@ -282,9 +308,6 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
   return { graph: statements.join(";\n"), videoLabel: "vout", audioLabel, durationTick: framesToTicks(frameCount, project.settings.fps), frameCount };
 }
 
-function trackEffects(_track: Sequence["tracks"][number]): import("@mcp-video-studio/contracts").EffectInstance[] {
-  return [];
-}
 
 export async function renderSequence(store: ProjectStore, config: StudioConfig, options: RenderOptions): Promise<Record<string, unknown>> {
   const project = await store.read();
@@ -302,7 +325,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: asset.storage.sha256, offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
     output: { maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
-    renderer: 4
+    renderer: 5
   });
   const cachePath = path.join(store.root, "cache", "renders", `${renderKey}.${preset.container}`);
   const durationTick = sequenceDuration(sequence);

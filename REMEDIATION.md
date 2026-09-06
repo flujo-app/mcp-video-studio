@@ -52,3 +52,21 @@ history/schema1-project.json. Older binaries reject schema 2 instead of silently
 using obsolete history state. Use an archive backup before changing versions;
 downgrading requires a separate export/conversion, not editing the version number.
 Archive inspection reports the source and target schema versions.
+
+## Audio and finishing continuation
+
+Clip and track effect stacks can be added, parameter-edited, bypassed, reordered
+and removed in Studio. Track gain/pan/effects are applied after clip mixing.
+Supported processors include EQ, high/low-pass, compression, limiting, gate,
+de-essing, delay, short multi-tap reverb and loudness normalization. Duplicate
+clip/track normalization is rejected. Program preview and final export share
+this processing graph.
+
+Effect parameters are bounded and unknown effects are reported, never silently
+discarded. Chroma-key colors cannot inject filter expressions. Crop, mirrored
+scale and RGB blend modes use the clip's alpha coverage; real pixel tests verify
+multiply/screen composition outside transformed bounds. Audio tests measure
+actual post-mix limiting/bypass and run the supported processor chain in FFmpeg.
+The full local gate now has50 passing tests including real browser/render tests.
+Further transition, range-cache, generation, animation and full production
+acceptance work remains underway; this is not a v1 release claim.

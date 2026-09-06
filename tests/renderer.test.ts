@@ -12,3 +12,12 @@ describe("render filter compilation", () => {
     expect(audioEffectFilters([{ id: "hp", type: "highpass", enabled: true, version: 1, parameters: { frequency: 90 } }])).toEqual(["highpass=f=90"]);
   });
 });
+
+it("rejects filter injection, unknown effects, unbounded stacks and invalid numeric controls",()=>{
+ const effect={id:"effect",type:"chromaKey",enabled:true,version:1,parameters:{color:"green;movie=/etc/passwd"}};
+ expect(()=>videoEffectFilters([effect])).toThrow("filter expressions");
+ expect(()=>videoEffectFilters([{...effect,type:"unknown"}])).toThrow("not supported");
+ expect(()=>audioEffectFilters([{...effect,type:"equalizer",parameters:{bands:Array(33).fill({})}}])).toThrow("32 EQ");
+ expect(()=>audioEffectFilters([{...effect,type:"highpass",parameters:{frequency:"100,amovie=/etc/passwd"}}])).toThrow("finite number");
+ expect(()=>audioEffectFilters(Array(2).fill({...effect,type:"loudness",parameters:{}}))).toThrow("one loudness");
+});

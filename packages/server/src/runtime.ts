@@ -498,7 +498,7 @@ export class StudioRuntime {
     const commands: ProjectCommand[] = media.map((asset) => {
       const track = asset.kind === "audio" ? audioTrack : videoTrack;
       const rawDuration = asset.kind === "image" ? secondsToTicks(input.imageDurationSeconds ?? 5) : Math.max(asset.probe.durationTick, secondsToTicks(1));
-      const durationTick = track.type === "audio" ? rawDuration : framesToTicks(ticksToFrames(rawDuration, project.settings.fps, "ceil"), project.settings.fps);
+      const durationTick = track.type === "audio" ? rawDuration : framesToTicks(Math.max(1,ticksToFrames(rawDuration, project.settings.fps, "floor")), project.settings.fps);
       const startTick = track.type === "audio" ? audioCursor : visualCursor;
       const clip = defaultClip(track.id, { type: "media", mediaId: asset.id }, asset.name, durationTick);
       clip.startTick = startTick;

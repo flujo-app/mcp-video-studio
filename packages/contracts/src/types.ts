@@ -61,6 +61,7 @@ export interface Track {
   hidden: boolean;
   gainDb: number;
   pan: number;
+  effects?: EffectInstance[];
 }
 
 export interface Transform {
@@ -372,7 +373,7 @@ export type AdvancedProjectCommand =
 export type ProjectCommand =
   | AdvancedProjectCommand
   | { type: "track.add"; sequenceId: UUID; track: Omit<Track, "sequenceId"> }
-  | { type: "track.update"; sequenceId: UUID; trackId: UUID; patch: Partial<Pick<Track, "name" | "order" | "locked" | "muted" | "solo" | "hidden" | "gainDb" | "pan">> }
+  | { type: "track.update"; sequenceId: UUID; trackId: UUID; patch: Partial<Pick<Track, "name" | "order" | "locked" | "muted" | "solo" | "hidden" | "gainDb" | "pan" | "effects">> }
   | { type: "track.remove"; sequenceId: UUID; trackId: UUID; removeClips: boolean }
   | { type: "clip.add"; sequenceId: UUID; clip: Clip; mode: InsertMode }
   | { type: "clip.move"; sequenceId: UUID; clipIds: UUID[]; targetTrackId: UUID; startTick: number; ripple: boolean }

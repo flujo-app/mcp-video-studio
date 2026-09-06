@@ -34,7 +34,8 @@ const trackSchema = z.object({
   solo: z.boolean(),
   hidden: z.boolean(),
   gainDb: z.number().finite().min(-120).max(24),
-  pan: z.number().finite().min(-1).max(1)
+  pan: z.number().finite().min(-1).max(1),
+  effects: z.array(effectSchema).max(64).default([])
 });
 
 const clipSchema = z.object({
