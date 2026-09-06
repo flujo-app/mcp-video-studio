@@ -1,0 +1,10 @@
+.program-audio-meters button {
+  color: #ffffff;
+  background: #263348;
+  border: 1px solid #73849c;
+  border-radius: 5px;
+  padding: 6px 9px;
+}
+.program-audio-meters button:hover:not(:disabled) { background: #354864; }
+.program-audio-meters button:disabled { color: #bac9dc; background: #1b2533; cursor: default; }
+.program-audio-meters button:focus-visible { outline: 2px solid #78b7ff; outline-offset: 2px; }

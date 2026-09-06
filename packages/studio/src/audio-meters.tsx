@@ -1,3 +1,4 @@
+import "./audio-meters.css";
 import React,{useEffect,useRef,useState,type RefObject} from "react";
 /** Measures the actual decoded program preview, not estimated clip gain values. */
 export function ProgramAudioMeter({media,sourceKey}:{media:RefObject<HTMLVideoElement|null>;sourceKey:string}){
@@ -23,7 +24,7 @@ export function ProgramAudioMeter({media,sourceKey}:{media:RefObject<HTMLVideoEl
   return()=>{cancelled=true;cancelAnimationFrame(frame);source.disconnect();splitter.disconnect();meters.forEach(meter=>meter.disconnect());void ctx.close().catch(()=>undefined);if(context.current===ctx)context.current=null;};
  },[enabled,sourceKey,media]);
  if(!sourceKey)return null;
- return <fieldset aria-label="Program mix playback meters"><legend>Program mix playback meters</legend>
+ return <fieldset className="program-audio-meters" aria-label="Program mix playback meters"><legend>Program mix playback meters</legend>
  <button disabled={enabled} onClick={()=>setEnabled(true)}>Enable audio meters</button>
  {["Left","Right"].map((label,index)=><label key={label}>{label}<meter min="-90" max="0" low={-18} high={-1} optimum={-12} value={levels[index]}/><output data-audio-meter={label.toLowerCase()} data-db={levels[index]}>{levels[index]!.toFixed(1)} dBFS</output></label>)}
  <small>Decoded preview sample peaks; export QC measures integrated loudness and true peak.</small><p role="status">{error}</p>

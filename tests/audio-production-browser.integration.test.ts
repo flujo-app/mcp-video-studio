@@ -53,9 +53,10 @@ integration("browser and actual stdio MCP produce, duck, mix, meter, review and 
   await page.getByRole("button",{name:"Build preview",exact:true}).click();
   await page.getByRole("button",{name:"Enable audio meters",exact:true}).waitFor({timeout:90000});await page.getByRole("button",{name:"Enable audio meters",exact:true}).click();
   await page.getByRole("button",{name:"Play or pause",exact:true}).click();
-  await page.waitForFunction(()=>Number(document.querySelector('[data-audio-meter="left"]')?.getAttribute("data-db")??-90)>-50);
+  const playingSample=await page.waitForFunction(()=>{const dbfs=Number(document.querySelector('[data-audio-meter="left"]')?.getAttribute("data-db")??-90);return dbfs>-50?{dbfs}:false;});
+  const measured=await playingSample.jsonValue();await playingSample.dispose();
+  const meter=typeof measured==="object"?measured.dbfs:-90;expect(meter).toBeGreaterThan(-50);
   await page.getByRole("button",{name:"Play or pause",exact:true}).click();
-  const meter=Number(await page.locator('[data-audio-meter="left"]').getAttribute("data-db"));expect(meter).toBeGreaterThan(-50);
   await page.getByRole("button",{name:"Export",exact:true}).click();await page.getByRole("button",{name:"Queue render",exact:true}).click();
   const qc=page.locator("section[aria-label='Quality control']");
   await page.waitForFunction(()=>Boolean((document.querySelector("section[aria-label='Quality control'] input") as HTMLInputElement)?.value),undefined,{timeout:90000});
