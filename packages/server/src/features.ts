@@ -1,11 +1,13 @@
 import { createHash, randomUUID } from "node:crypto";
-import { ANIMATION_PRESETS, animationPreset, StudioException } from "@mcp-video-studio/core";
-import { parseCaptions, serializeCaptions, defaultClip, type GeneratedArtifact, type ProjectCommand } from "@mcp-video-studio/contracts";
+import { sequenceDuration, ANIMATION_PRESETS, animationPreset, StudioException } from "@mcp-video-studio/core";
+import { defaultTrack, framesToTicks, ticksToFrames, parseCaptions, serializeCaptions, defaultClip, type GeneratedArtifact, type ProjectCommand } from "@mcp-video-studio/contracts";
 import { z } from "zod";
 import type { StudioRuntime } from "./runtime.js";
 
 const revision = { projectPath: z.string().min(1), expectedRevision: z.number().int().nonnegative() };
 export const featureSchemas = {
+  create_sequence: z.object({...revision,name:z.string().trim().min(1).max(200),activate:z.boolean().default(true)}),
+  insert_nested_sequence: z.object({...revision,sequenceId:z.string(),sourceSequenceId:z.string(),trackId:z.string(),startTick:z.number().int().nonnegative(),mode:z.enum(["insert","overwrite"]).default("insert")}),
   create_animation_preset: z.object({ ...revision, sequenceId: z.string(), trackId: z.string(), startTick: z.number().int().nonnegative(), durationTick: z.number().int().positive(), preset: z.enum(ANIMATION_PRESETS), text: z.string().min(1).max(200) }),
   import_captions: z.object({ ...revision, sequenceId: z.string(), trackId: z.string(), format: z.enum(["srt", "vtt"]), text: z.string().max(1_000_000) }),
   export_captions: z.object({ projectPath: z.string(), sequenceId: z.string(), format: z.enum(["srt", "vtt"]) }),
@@ -19,6 +21,18 @@ function fail(message: string): never { throw new StudioException("INVALID_EDIT"
 export async function invokeFeature(runtime: StudioRuntime, name: FeatureName, value: unknown): Promise<Record<string, unknown>> {
   const input = featureSchemas[name].parse(value);
   const project = await runtime.store(input.projectPath).read();
+  if(name==="create_sequence"){
+    const p=featureSchemas.create_sequence.parse(input),id=randomUUID();
+    const sequence={id,name:p.name,tracks:[defaultTrack(id,"video",0),defaultTrack(id,"audio",1),defaultTrack(id,"caption",2,"Captions")],clips:[],transitions:[],automation:[],markers:[],captions:[]};
+    return runtime.apply(p.projectPath,p.expectedRevision,[{type:"sequence.add",sequence},...(p.activate?[{type:"sequence.activate" as const,sequenceId:id}]:[])]);
+  }
+  if(name==="insert_nested_sequence"){
+    const p=featureSchemas.insert_nested_sequence.parse(input),owner=project.sequences.find(sequence=>sequence.id===p.sequenceId),source=project.sequences.find(sequence=>sequence.id===p.sourceSequenceId);
+    if(!owner||!source||owner.id===source.id||!owner.tracks.some(track=>track.id===p.trackId&&!track.locked&&["video","overlay"].includes(track.type)))fail("Choose a distinct source sequence and an unlocked visual track.");
+    const duration=sequenceDuration(source);if(duration<=0)fail("The source sequence is empty.");
+    const clip=defaultClip(p.trackId,{type:"sequence",sequenceId:source.id},source.name,framesToTicks(ticksToFrames(duration,project.settings.fps,"ceil"),project.settings.fps));clip.startTick=p.startTick;
+    return runtime.apply(p.projectPath,p.expectedRevision,[{type:"clip.add",sequenceId:owner.id,clip,mode:p.mode}]);
+  }
   if (name === "export_captions") {
     const p = featureSchemas.export_captions.parse(input), sequence = project.sequences.find(s => s.id === p.sequenceId);
     if (!sequence) fail("Sequence not found.");

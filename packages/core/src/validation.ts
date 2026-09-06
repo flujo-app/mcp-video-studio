@@ -1,4 +1,5 @@
-import { animationProblems, StudioProjectSchema, ticksPerSample, ticksPerFrame, type Clip, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
+import {sequenceDependencies} from "./nesting.js";
+import { framesToTicks, ticksToFrames, animationProblems, StudioProjectSchema, ticksPerSample, ticksPerFrame, type Clip, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import {prepareTransitionTimeline} from "./transitions.js";
 import { StudioException } from "./errors.js";
 
@@ -28,6 +29,7 @@ export function validateProject(project: StudioProject): StudioProject {
 
   const normalized = parsed.data as StudioProject;
   for (const sequence of normalized.sequences) {
+    sequenceDependencies(normalized,sequence.id,true);
     prepareTransitionTimeline(normalized,sequence);
     const clips = new Map(sequence.clips.map((clip) => [clip.id, clip]));
     for (const clip of sequence.clips) {
@@ -43,6 +45,7 @@ export function validateProject(project: StudioProject): StudioProject {
         const source=normalized.media.find(item=>clip.source.type==="media"&&item.id===clip.source.mediaId);
         if(source&&source.kind!=="image")sourceDuration=source.probe.durationTick;
       }else if(clip.source.type==="animation")sourceDuration=normalized.animations.find(item=>clip.source.type==="animation"&&item.id===clip.source.animationId)?.durationTick;
+      if(clip.source.type==="sequence"){const source=normalized.sequences.find(item=>clip.source.type==="sequence"&&item.id===clip.source.sequenceId);if(source)sourceDuration=framesToTicks(ticksToFrames(sequenceDuration(source),normalized.settings.fps,"ceil"),normalized.settings.fps);}
       if(sourceDuration!==undefined&&clip.sourceInTick+Math.round(clip.durationTick*rate)>sourceDuration+ticksPerSample(normalized.settings.sampleRate))throw new StudioException("SOURCE_HANDLES","Clip trim or speed exceeds available source media.","input",{clipId:clip.id});
       if(clip.crop.left+clip.crop.right>=1||clip.crop.top+clip.crop.bottom>=1)throw new StudioException("INVALID_CROP","Crop must leave a visible positive area.","input");
       if (clip.source.type === "media" && !mediaIds.has(clip.source.mediaId)) throw new StudioException("MISSING_MEDIA", `Clip ${clip.id} references unknown media ${clip.source.mediaId}.`, "input");

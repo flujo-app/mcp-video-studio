@@ -1,4 +1,4 @@
-import { mkdir, rm } from "node:fs/promises";
+import { mkdir, rm, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { randomUUID } from "node:crypto";
 import { prepareSandbox, browserEnvironment } from "./sandbox.js";
@@ -10,7 +10,7 @@ import { animationProblems } from "@mcp-video-studio/contracts";
 import { createAnimationPainter } from "./painter.js";
 import { evaluateAnimation } from "./evaluate.js";
 
-export const ANIMATION_RENDERER_VERSION=3;
+export const ANIMATION_RENDERER_VERSION=4;
 
 const RENDERER_HTML = '<!doctype html><html><head><meta charset="utf-8"><style>*{box-sizing:border-box}html,body{margin:0;overflow:hidden;background:transparent}canvas{display:block}</style></head><body><canvas id="canvas"></canvas><script>window.__applyState=('+createAnimationPainter.toString()+')(document.getElementById("canvas"));</script></body></html>';
 
@@ -61,7 +61,13 @@ export async function renderAnimation(document: AnimationDocument, config: Studi
           await host.renderFrame(state);
         }, { frame, tick, time: tick / 35_280_000, seed: document.seed }, false);
       }
-      await page.screenshot({ path: path.join(frames, `${String(frame).padStart(8, "0")}.png`), type: "png", omitBackground: document.canvas.background === "transparent", animations: "allow", caret: "hide" });
+      const framePath=path.join(frames,String(frame).padStart(8,"0")+".png");
+      if(document.mode==="declarative"){
+        // Capture the completed canvas bitmap directly. Browser compositor screenshots can
+        // race transparent GPU surface presentation on macOS even after drawing completes.
+        const png=await page.evaluate(()=>{const canvas=globalThis.document.querySelector("canvas");if(!(canvas instanceof HTMLCanvasElement))throw new Error("Animation canvas is missing.");return canvas.toDataURL("image/png");});
+        await writeFile(framePath,Buffer.from(png.slice("data:image/png;base64,".length),"base64"));
+      }else await page.screenshot({path:framePath,type:"png",omitBackground:document.canvas.background==="transparent",animations:"allow",caret:"hide"});
       options.onProgress?.((frame + 1) / (frameCount + 1));
     }
     const fpsText = `${options.fps.numerator}/${options.fps.denominator}`;

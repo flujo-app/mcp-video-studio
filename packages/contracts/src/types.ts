@@ -403,4 +403,8 @@ export type ProjectCommand =
   | { type: "generation.version.add"; artifactId: UUID; version: GeneratedArtifactVersion }
   | { type: "generation.version.update"; artifactId: UUID; versionId: UUID; patch: Partial<Pick<GeneratedArtifactVersion, "status" | "output" | "review" | "error">> }
   | { type: "generation.version.activate"; artifactId: UUID; versionId: UUID }
-  | { type: "project.rename"; name: string };
+  | { type: "project.rename"; name: string }
+  | { type: "sequence.add"; sequence: Sequence }
+  | { type: "sequence.rename"; sequenceId: UUID; name: string }
+  | { type: "sequence.activate"; sequenceId: UUID }
+  | { type: "sequence.remove"; sequenceId: UUID };

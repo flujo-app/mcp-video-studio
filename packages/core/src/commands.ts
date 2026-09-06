@@ -104,6 +104,17 @@ export function applyProjectCommands(project: StudioProject, commands: ProjectCo
       if (!next.name) throw new StudioException("INVALID_NAME", "Project name cannot be empty.", "input");
       continue;
     }
+    if(command.type==="sequence.add"){
+      if(next.sequences.some(sequence=>sequence.id===command.sequence.id))throw new StudioException("DUPLICATE_ID","Sequence ID already exists.","input");
+      next.sequences.push(structuredClone(command.sequence));addUnique(changed.sequences,command.sequence.id);for(const track of command.sequence.tracks)addUnique(changed.tracks,track.id);continue;
+    }
+    if(command.type==="sequence.activate"){sequenceById(next,command.sequenceId);next.activeSequenceId=command.sequenceId;addUnique(changed.sequences,command.sequenceId);continue;}
+    if(command.type==="sequence.rename"){const sequence=sequenceById(next,command.sequenceId);if(!command.name.trim())throw new StudioException("INVALID_NAME","Sequence name cannot be empty.","input");sequence.name=command.name.trim();addUnique(changed.sequences,sequence.id);continue;}
+    if(command.type==="sequence.remove"){
+      const sequence=sequenceById(next,command.sequenceId);
+      if(next.sequences.length===1||next.sequences.some(owner=>owner.clips.some(clip=>clip.source.type==="sequence"&&clip.source.sequenceId===sequence.id))||next.generatedArtifacts.some(artifact=>artifact.scope.sequenceId===sequence.id))throw new StudioException("SEQUENCE_IN_USE","Keep at least one sequence and remove nested/generated references before deleting a sequence.","input");
+      next.sequences=next.sequences.filter(item=>item.id!==sequence.id);if(next.activeSequenceId===sequence.id)next.activeSequenceId=next.sequences[0]!.id;addUnique(changed.sequences,sequence.id);continue;
+    }
     if (command.type === "animation.set") {
       const index = next.animations.findIndex((item) => item.id === command.animation.id);
       if (index >= 0) next.animations[index] = structuredClone(command.animation);

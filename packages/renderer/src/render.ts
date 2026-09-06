@@ -3,7 +3,7 @@ import { existsSync } from "node:fs";
 import { copyFile, link, mkdir, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
-import { prepareTransitionTimeline, transitionStyle, ProjectStore, sequenceDuration, sha256File, readJson, writeJson, confinedPath, StudioException } from "@mcp-video-studio/core";
+import { sequenceDependencies, prepareTransitionTimeline, transitionStyle, ProjectStore, sequenceDuration, sha256File, readJson, writeJson, confinedPath, StudioException } from "@mcp-video-studio/core";
 import { renderAnimation,ANIMATION_RENDERER_VERSION } from "@mcp-video-studio/animation";
 import { requireFfmpegFilters, filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
 import { audioAutomationFilters } from "./automation.js";
@@ -26,7 +26,7 @@ export interface RenderOptions {
 interface InputSpec {
   args: string[];
   clip: Clip;
-  media?: MediaAsset;
+  media?: Pick<MediaAsset,"id"|"kind"|"probe">;
   inputIndex: number;
   path?: string;
   streams?: "video" | "audio";
@@ -160,7 +160,7 @@ function captionFontFile(fontFamily: string, configured?: string): string {
   return match;
 }
 
-async function buildInputs(project: StudioProject, sequence: Sequence, store: ProjectStore, config: StudioConfig, signal?: AbortSignal, progress?: (value: number, message: string) => void, streams: {video?:boolean;audio?:boolean} = {}): Promise<InputSpec[]> {
+async function buildInputs(project: StudioProject, sequence: Sequence, store: ProjectStore, config: StudioConfig, signal?: AbortSignal, progress?: (value: number, message: string) => void, streams: {video?:boolean;audio?:boolean;scratch?:string} = {}): Promise<InputSpec[]> {
   const enabled = sequence.clips.filter((clip) => clip.enabled);
   const inputs: InputSpec[] = [];
   let index = 0;
@@ -171,6 +171,15 @@ async function buildInputs(project: StudioProject, sequence: Sequence, store: Pr
       // Independent demuxers prevent a trimmed video stream from ending the clip's audio input.
       if(streams.video!==false&&(media.probe.hasVideo||media.kind==="image"))inputs.push({args:media.kind==="image"?["-loop","1","-an","-i",source]:["-an","-i",source],clip,media,inputIndex:index++,path:source,streams:"video"});
       if(streams.audio!==false&&media.probe.hasAudio)inputs.push({args:["-vn","-i",source],clip,media,inputIndex:index++,path:source,streams:"audio"});
+    } else if(clip.source.type==="sequence"){
+      if(!streams.scratch)throw new StudioException("NESTED_RENDER_CONTEXT","Nested rendering requires its parent scratch directory.","runtime");
+      const preset=project.exportPresets.find(preset=>preset.container==="mkv"&&preset.videoCodec==="ffv1"&&preset.audioCodec==="flac");
+      if(!preset)throw new StudioException("NESTED_RENDER_PRESET","Add an FFV1/FLAC Matroska preset to render nested sequences.","input");
+      const rendered=path.join(streams.scratch,"nested-"+randomUUID()+".mkv");
+      const result=await renderSequence(store,config,{sequenceId:clip.source.sequenceId,presetId:preset.id,outputPath:rendered,expectedRevision:project.revision,...(signal?{signal}:{})});
+      const media={id:clip.source.sequenceId,kind:"video" as const,probe:result.probe as MediaAsset["probe"]};
+      if(streams.video!==false)inputs.push({args:["-an","-i",rendered],clip,media,inputIndex:index++,path:rendered,streams:"video"});
+      if(streams.audio!==false)inputs.push({args:["-vn","-i",rendered],clip,media,inputIndex:index++,path:rendered,streams:"audio"});
     } else if (streams.video!==false&&clip.source.type === "color") {
       inputs.push({ args: ["-f", "lavfi", "-i", `color=c=${ffmpegColor(clip.source.color)}:s=${project.settings.raster.width}x${project.settings.raster.height}:r=${project.settings.fps.numerator}/${project.settings.fps.denominator}`], clip, inputIndex: index++ });
     } else if (streams.video!==false&&clip.source.type === "animation") {
@@ -344,10 +353,10 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
 
 function visualClip(project:StudioProject,sequence:Sequence,clip:Clip):boolean{
  if(!clip.enabled||sequence.tracks.find(track=>track.id===clip.trackId)?.hidden)return false;
- if(clip.source.type==="sequence")throw new StudioException("NESTED_SEQUENCE_UNSUPPORTED","Render nested sequences to managed media before inserting them; nested clips are not silently omitted.","input");
+ if(clip.source.type==="sequence")return true;
  return clip.source.type==="color"||clip.source.type==="animation"||clip.source.type==="media"&&project.media.some(media=>clip.source.type==="media"&&media.id===clip.source.mediaId&&(media.probe.hasVideo||media.kind==="image"));
 }
-function audibleClip(project:StudioProject,clip:Clip):boolean{return clip.enabled&&clip.source.type==="media"&&project.media.some(media=>clip.source.type==="media"&&media.id===clip.source.mediaId&&media.probe.hasAudio);}
+function audibleClip(project:StudioProject,clip:Clip):boolean{return clip.enabled&&(clip.source.type==="sequence"||clip.source.type==="media"&&project.media.some(media=>clip.source.type==="media"&&media.id===clip.source.mediaId&&media.probe.hasAudio));}
 async function continuousAudio(project:StudioProject,sequence:Sequence,store:ProjectStore,config:StudioConfig,options:RenderOptions,scratch:string,mediaHashes:Map<string,string>){
  const clips=sequence.clips.filter(clip=>audibleClip(project,clip)),ids=new Set(clips.map(clip=>clip.id));
  const mediaIds=new Set(clips.flatMap(clip=>clip.source.type==="media"?[clip.source.mediaId]:[]));
@@ -356,11 +365,11 @@ async function continuousAudio(project:StudioProject,sequence:Sequence,store:Pro
   clips:clips.map(({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})=>({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})),
   tracks:sequence.tracks.map(({id,type,muted,solo,gainDb,pan,effects})=>({id,type,muted,solo,gainDb,pan,effects})),
   automation:sequence.automation,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
-  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:12,animationRenderer:ANIMATION_RENDERER_VERSION});
+  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:13,animationRenderer:ANIMATION_RENDERER_VERSION});
  const cached=confinedPath(store.root,path.join(store.root,"cache","renders","audio-"+key+".wav"));
  let hit=false;try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
  if(!hit){
-  const inputs=await buildInputs(project,{...sequence,clips},store,config,options.signal,options.onProgress,{video:false});
+  const inputs=await buildInputs(project,{...sequence,clips},store,config,options.signal,options.onProgress,{video:false,scratch});
   const graph=buildFilterGraph(project,sequence,inputs,new Map(),undefined,undefined,{video:false});
   const graphPath=path.join(scratch,"continuous-audio.txt");await writeFile(graphPath,graph.graph,"utf8");
   await ffmpegArtifact(config,[...inputs.flatMap(input=>input.args),await filterScriptOption(config.ffmpegPath),graphPath,"-map","["+graph.audioLabel+"]","-t",String(ticksToSeconds(durationTick)),"-c:a","pcm_f32le","-rf64","auto","-vn"],cached,{signal:options.signal,timeoutMs:24*60*60_000});
@@ -369,6 +378,14 @@ async function continuousAudio(project:StudioProject,sequence:Sequence,store:Pro
  const pinned=path.join(scratch,"continuous-audio.wav");await link(cached,pinned).catch(()=>copyFile(cached,pinned));
  await utimes(cached,new Date(),new Date()).catch(()=>undefined);
  return{args:["-i",pinned],cacheHit:hit,renderKey:key};
+}
+function nestedFingerprint(project:StudioProject,clips:Clip[],mediaHashes:Map<string,string>){
+ const sequences=new Set<string>(),media=new Set<string>(),animations=new Set<string>();
+ for(const clip of clips)if(clip.enabled&&clip.source.type==="sequence"){
+  const dependencies=sequenceDependencies(project,clip.source.sequenceId);
+  for(const id of dependencies.sequences)sequences.add(id);for(const id of dependencies.media)media.add(id);for(const id of dependencies.animations)animations.add(id);
+ }
+ return{sequences:project.sequences.filter(sequence=>sequences.has(sequence.id)),media:[...media].map(id=>({id,sha256:mediaHashes.get(id)})),animations:project.animations.filter(animation=>animations.has(animation.id))};
 }
 interface CachedRange{startTick:number;endTick:number;renderKey:string;cacheHit:boolean}
 async function videoRanges(project:StudioProject,sequence:Sequence,store:ProjectStore,config:StudioConfig,options:RenderOptions,scratch:string,captionFiles:Map<string,string>,mediaHashes:Map<string,string>){
@@ -385,19 +402,20 @@ async function videoRanges(project:StudioProject,sequence:Sequence,store:Project
   const captions=sequence.captions.filter(caption=>caption.startTick<endTick&&caption.startTick+caption.durationTick>startTick);
   const rangeSequence={...sequence,clips:owned,captions};
   const key=canonicalHash({
+   nested:nestedFingerprint(project,owned,mediaHashes),
    startTick,endTick,clips:owned.map(({name,audio,groupId,linkedGroupId,...clip})=>clip),
    tracks:sequence.tracks.filter(track=>owned.some(clip=>clip.trackId===track.id)||captions.some(caption=>caption.trackId===track.id)).map(({id,order,hidden,muted,type})=>({id,order,hidden,muted:type==="caption"?muted:undefined})),
    captions,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
    settings:{raster:project.settings.raster,fps:project.settings.fps,background:project.settings.background,colorSpace:project.settings.colorSpace},
    media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),
    animations:project.animations.filter(animation=>animationIds.has(animation.id)),
-   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:12,animationRenderer:ANIMATION_RENDERER_VERSION
+   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:13,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cached=confinedPath(store.root,path.join(store.root,"cache","renders","video-"+key+".mkv"));
   let hit=false;
   try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
   if(!hit){
-   const inputs=await buildInputs(project,rangeSequence,store,config,options.signal,options.onProgress,{audio:false});
+   const inputs=await buildInputs(project,rangeSequence,store,config,options.signal,options.onProgress,{audio:false,scratch});
    const compiled=buildFilterGraph(project,rangeSequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{audio:false,range:{startTick,endTick}});
    const graphPath=path.join(scratch,"range-"+ranges.length+".txt");await writeFile(graphPath,compiled.graph,"utf8");
    await ffmpegArtifact(config,[...inputs.flatMap(input=>input.args),await filterScriptOption(config.ffmpegPath),graphPath,"-map","["+compiled.videoLabel+"]","-frames:v",String(compiled.frameCount),"-c:v","ffv1","-level","3","-an"],cached,{signal:options.signal,timeoutMs:60*60_000});
@@ -423,8 +441,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
   if(options.videoRangeFrames!==undefined&&(!Number.isSafeInteger(options.videoRangeFrames)||options.videoRangeFrames<0||options.videoRangeFrames>100000))throw new StudioException("INVALID_RENDER_RANGE","Video range frames must be an integer from 0 to 100000.","input");
   const sequence = prepareTransitionTimeline(project,sequenceById(project, options.sequenceId));
   const preset = presetById(project, options.presetId);
-  const mediaIds = new Set(sequence.clips.flatMap((clip) => clip.source.type === "media" ? [clip.source.mediaId] : []));
-  const animationIds = new Set(sequence.clips.flatMap((clip) => clip.source.type === "animation" ? [clip.source.animationId] : []));
+  const dependencies=sequenceDependencies(project,sequence.id),mediaIds=dependencies.media,animationIds=dependencies.animations;
   const mediaHashes=new Map<string,string>();
   for(const media of project.media.filter(asset=>mediaIds.has(asset.id))){
    const source=mediaPath(store,media);
@@ -435,12 +452,13 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
 
   const renderKey = canonicalHash({
     sequence,
+    nested:project.sequences.filter(child=>child.id!==sequence.id&&dependencies.sequences.has(child.id)),
     settings: project.settings,
     preset,
     media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: mediaHashes.get(asset.id), offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
     output: { videoRangeFrames:options.videoRangeFrames??null, maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
-    renderer: 12,animationRenderer:ANIMATION_RENDERER_VERSION
+    renderer: 13,animationRenderer:ANIMATION_RENDERER_VERSION
   });
   const cachePath = confinedPath(store.root,path.join(store.root,"cache","renders",renderKey+"."+preset.container));
   const durationTick = sequenceDuration(sequence);
@@ -487,7 +505,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     const cachedVideo=useRanges?await videoRanges(project,sequence,store,config,options,scratch,captionFiles,mediaHashes):undefined;
     const cachedAudio=cachedVideo?await continuousAudio(project,sequence,store,config,options,scratch,mediaHashes):undefined;
     const inputSequence=cachedVideo?{...sequence,clips:[]}:audioOnly?{...sequence,clips:sequence.clips.filter(clip=>audibleClip(project,clip))}:sequence;
-    const inputs=await buildInputs(project,inputSequence,store,config,options.signal,options.onProgress,{video:!audioOnly});
+    const inputs=await buildInputs(project,inputSequence,store,config,options.signal,options.onProgress,{video:!audioOnly,scratch});
     const compiled = buildFilterGraph(project,sequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{video:!audioOnly&&!cachedVideo,audio:!cachedAudio,...(cachedVideo?{cachedVideoInput:inputs.length}:{}),...(cachedAudio?{cachedAudioInput:inputs.length+1}:{})});
     const graphPath = path.join(scratch, "filter-complex.txt");
     await writeFile(graphPath, compiled.graph, "utf8");
