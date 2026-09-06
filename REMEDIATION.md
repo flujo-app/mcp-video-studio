@@ -78,3 +78,11 @@ Centered crossfades and directional wipes preserve the authored cut and total du
 QC performs a complete decode, measures actual video frames and produces bounded black, freeze and silence ranges with affected clip IDs. Studio can navigate those findings, inspect measured values, and save intentional-range reasons. Reports show their revision and require reanalysis after edits. Concurrent revision failures require a successful reload before reapply; validation errors are not presented as conflicts.
 
 Validation: 55 tests across 26 files passed with real FFmpeg and Chromium enabled, including a browser render/QC/navigation/review/reload/conflict flow, centered transition pixels and exact 48,100-sample WAV output. Packed modern/legacy stdio and browser acceptance also pass. Full epic acceptance work continues; this is not a v1 release.
+
+## Incremental rendering and automation boundaries
+
+Long timelines now cache frame-aligned FFV1 video ranges and an independently keyed continuous float WAV audio mix. Transition and caption pixel parity is byte exact against the whole renderer; audio keeps the exact sample count with at most one 24-bit PCM rounding step. Cache hits verify checksums before publication, media source hashes invalidate stale renders, and finished exports are checked in a sibling staging file before replacing an existing output.
+
+The real 30-minute mixed-media acceptance passed: 901 video/image/color/audio clips with proxies, 54,000 frames, 180 ranges, 545 ms browser load and 51 ms far-end scroll on the remediation VM. Editing the final clip reused 179 ranges and the audio mix. Initial render took 147.8 seconds; the revised export took 63.3 seconds including full-duration encoding. CI now runs this acceptance separately on Linux Node 22. See RENDER_CACHE.md for cache behavior and parity limits.
+
+A gain-range update now splices an existing automation lane instead of replacing its outside-range envelope. Sample-by-sample regression tests cover linear boundary preservation, target mismatch rejection and durable undo. This also repairs Studio's repeated Set gain range operation.

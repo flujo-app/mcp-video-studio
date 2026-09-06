@@ -35,12 +35,12 @@ export async function readJson<T>(filePath: string): Promise<T> {
   }
 }
 
-export async function sha256File(filePath: string): Promise<{ sha256: string; bytes: number }> {
+export async function sha256File(filePath: string,signal?:AbortSignal): Promise<{ sha256: string; bytes: number }> {
   const info = await stat(filePath);
   if (!info.isFile()) throw new StudioException("NOT_A_FILE", `${filePath} is not a file.`, "input");
   const hash = createHash("sha256");
   await new Promise<void>((resolve, reject) => {
-    const stream = createReadStream(filePath);
+    const stream = createReadStream(filePath,{signal});
     stream.on("data", (chunk) => hash.update(chunk));
     stream.once("error", reject);
     stream.once("end", resolve);
@@ -61,8 +61,9 @@ export async function ensureInside(root: string, candidate: string): Promise<str
 }
 
 export async function writeJson(filePath: string, value: unknown): Promise<void> {
-  if(Buffer.byteLength(JSON.stringify(value))>64*1024*1024)throw new StudioException("JSON_SIZE_LIMIT","JSON documents and history entries are limited to 64 MiB.","input");
-  await atomicWrite(filePath, `${JSON.stringify(value, null, 2)}\n`);
+  const content=JSON.stringify(value,null,2)+"\n";
+  if(Buffer.byteLength(content)>64*1024*1024)throw new StudioException("JSON_SIZE_LIMIT","JSON documents and history entries are limited to 64 MiB.","input");
+  await atomicWrite(filePath,content);
 }
 
 export async function copyFileAtomic(source: string, destination: string): Promise<void> {

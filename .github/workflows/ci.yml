@@ -48,4 +48,11 @@ jobs:
         run: npm run check:package
         env:
           RUN_BROWSER_INTEGRATION: "1"
+      - name: Full 30-minute mixed-media editor and range-cache acceptance
+        if: runner.os == 'Linux' && matrix.node == 22
+        run: npx vitest run tests/long-project.integration.test.ts
+        env:
+          RUN_LONG_INTEGRATION: "1"
+          RUN_FFMPEG_INTEGRATION: "1"
+          RUN_BROWSER_INTEGRATION: "1"
       - run: npm audit --omit=dev --audit-level=moderate

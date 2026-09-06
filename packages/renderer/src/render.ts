@@ -1,9 +1,9 @@
 import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
-import { copyFile, mkdir, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
+import { copyFile, link, mkdir, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
-import { prepareTransitionTimeline, transitionStyle, ProjectStore, sequenceDuration, sha256File, StudioException } from "@mcp-video-studio/core";
+import { prepareTransitionTimeline, transitionStyle, ProjectStore, sequenceDuration, sha256File, readJson, writeJson, confinedPath, StudioException } from "@mcp-video-studio/core";
 import { renderAnimation } from "@mcp-video-studio/animation";
 import { requireFfmpegFilters, filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
 import { audioAutomationFilters } from "./automation.js";
@@ -14,6 +14,8 @@ export interface RenderOptions {
   presetId: string;
   outputPath: string;
   expectedRevision?: number;
+  /** Frame-aligned cache ranges; 0 disables range caching for parity verification. */
+  videoRangeFrames?: number;
   maxWidth?: number;
   crf?: number;
   encoderPreset?: "ultrafast" | "superfast" | "veryfast" | "faster" | "fast" | "medium";
@@ -66,13 +68,16 @@ export interface RenderCacheStats {
 }
 
 async function renderCacheEntries(projectRoot: string): Promise<Array<{ path: string; bytes: number; mtimeMs: number }>> {
-  const directory = path.join(projectRoot, "cache", "renders");
-  const names = await readdir(directory, { withFileTypes: true }).catch(() => []);
-  const entries = await Promise.all(names.filter((entry) => entry.isFile() && !entry.name.endsWith(".json")).map(async (entry) => {
-    const filePath = path.join(directory, entry.name);
-    const info = await stat(filePath);
-    return { path: filePath, bytes: info.size, mtimeMs: info.mtimeMs };
-  }));
+  const entries:Array<{path:string;bytes:number;mtimeMs:number}>=[];
+  for(const kind of ["renders","animations"]){
+   const directory=confinedPath(projectRoot,path.join(projectRoot,"cache",kind));
+   const names=await readdir(directory,{withFileTypes:true}).catch(()=>[]);
+   for(const entry of names.filter(entry=>entry.isFile()&&!entry.name.endsWith(".json")&&!entry.name.startsWith("."))){
+    const filePath=confinedPath(projectRoot,path.join(directory,entry.name));
+    const info=await stat(filePath).catch(()=>undefined);
+    if(info)entries.push({path:filePath,bytes:info.size,mtimeMs:info.mtimeMs});
+   }
+  }
   return entries.sort((a, b) => a.mtimeMs - b.mtimeMs || a.path.localeCompare(b.path));
 }
 
@@ -95,7 +100,7 @@ export async function pruneRenderCache(projectRoot: string, maxBytes: number, pr
   for (const entry of entries) {
     if (totalBytes <= maxBytes) break;
     if (preservePath && samePath(entry.path, preservePath)) continue;
-    await Promise.all([rm(entry.path, { force: true }), rm(`${entry.path}.json`, { force: true })]);
+    try{await rm(entry.path,{force:true});await rm(entry.path+".json",{force:true});}catch{continue;}
     totalBytes -= entry.bytes;
     freedBytes += entry.bytes;
     removedArtifacts += 1;
@@ -170,7 +175,7 @@ async function buildInputs(project: StudioProject, sequence: Sequence, store: Pr
       const animation = project.animations.find((candidate) => candidate.id === animationId);
       if (!animation) throw new StudioException("ANIMATION_NOT_FOUND", `Animation not found: ${animationId}`, "input");
       const key = canonicalHash({ animation, fps: project.settings.fps });
-      const rendered = path.join(store.root, "cache", "animations", `${key}.mkv`);
+      const rendered = confinedPath(store.root,path.join(store.root,"cache","animations",key+".mkv"));
       await mkdir(path.dirname(rendered), { recursive: true });
       try { await sha256File(rendered); }
       catch {
@@ -193,15 +198,17 @@ function fadeFilters(sequence:Sequence,clip:Clip):string[]{
 }
 
 
-function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: InputSpec[], captionFiles: Map<string, string>, maxWidth?: number, defaultFontFile?: string): { graph: string; videoLabel: string; audioLabel: string; durationTick: number; frameCount: number } {
-  const durationTick = sequenceDuration(sequence);
+function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: InputSpec[], captionFiles: Map<string, string>, maxWidth?: number, defaultFontFile?: string, pass: {video?:boolean;audio?:boolean;range?:{startTick:number;endTick:number};cachedVideoInput?:number;cachedAudioInput?:number} = {}): { graph: string; videoLabel: string; audioLabel: string; durationTick: number; frameCount: number } {
+  const durationTick = pass.range?pass.range.endTick-pass.range.startTick:sequenceDuration(sequence);
   if (durationTick <= 0) throw new StudioException("EMPTY_SEQUENCE", "The sequence has no renderable duration.", "input");
   const frameCount = ticksToFrames(durationTick, project.settings.fps, "ceil");
   const durationSeconds = ticksToSeconds(framesToTicks(frameCount, project.settings.fps));
   const fps = `${project.settings.fps.numerator}/${project.settings.fps.denominator}`;
   const { width, height } = project.settings.raster;
-  const statements: string[] = [`color=c=${ffmpegColor(project.settings.background)}:s=${width}x${height}:r=${fps}:d=${durationSeconds},format=rgba[base0]`];
+  const statements:string[]=[];
   let videoLabel = "base0";
+  if(pass.video!==false){
+  statements.push(`color=c=${ffmpegColor(project.settings.background)}:s=${width}x${height}:r=${fps}:d=${durationSeconds},format=rgba${pass.range ? ",setpts=PTS+"+ticksToSeconds(pass.range.startTick)+"/TB" : ""}[base0]`);
   const visual = inputs.filter(input => !sequence.tracks.find(track => track.id === input.clip.trackId)?.hidden).filter((input) => input.clip.source.type === "color" || input.media?.probe.hasVideo || input.media?.kind === "image" || input.clip.source.type === "animation")
     .sort((a, b) => {
       const trackA = sequence.tracks.find((track) => track.id === a.clip.trackId)?.order ?? 0;
@@ -211,9 +218,11 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
   visual.forEach((input, visualIndex) => {
     const clip = input.clip;
     const rate = clip.playbackRate.numerator / clip.playbackRate.denominator;
-    const sourceStart = ticksToSeconds(clip.sourceInTick);
-    const sourceDuration = ticksToSeconds(Math.round(clip.durationTick * rate));
-    const start = ticksToSeconds(clip.startTick);
+    const startTick=Math.max(clip.startTick,pass.range?.startTick??clip.startTick);
+    const finishTick=Math.min(clip.startTick+clip.durationTick,pass.range?.endTick??Number.MAX_SAFE_INTEGER);
+    const sourceStart = ticksToSeconds(clip.sourceInTick+Math.round((startTick-clip.startTick)*rate));
+    const sourceDuration = ticksToSeconds(Math.round((finishTick-startTick)*rate));
+    const start = ticksToSeconds(startTick);
     const transform = clipTransformFilters(clip, project.settings.raster);
     const filters = [
       `trim=start=${sourceStart}:duration=${sourceDuration}`,
@@ -253,10 +262,12 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
     const next = `caption${captionIndex}`;
     const textFile = captionFiles.get(caption.id);
     if (!textFile) throw new StudioException("CAPTION_TEXT_MISSING", `Caption text file missing for ${caption.id}.`, "runtime");
-    statements.push(`[${videoLabel}]drawtext=fontfile='${escapeFilterPath(captionFontFile(caption.style.fontFamily, defaultFontFile))}':textfile='${escapeFilterPath(textFile)}':reload=0:expansion=none:fontsize=${caption.style.fontSize}:fontcolor=${ffmpegCaptionColor(caption.style.color)}:box=1:boxcolor=${ffmpegCaptionColor(caption.style.background)}:boxborderw=18:x=${x}:y=${y}:enable='between(t,${start},${finish})'[${next}]`);
+    statements.push(`[${videoLabel}]drawtext=fontfile='${escapeFilterPath(captionFontFile(caption.style.fontFamily, defaultFontFile))}':textfile='${escapeFilterPath(textFile)}':reload=0:expansion=none:fontsize=${caption.style.fontSize}:fontcolor=${ffmpegCaptionColor(caption.style.color)}:box=1:boxcolor=${ffmpegCaptionColor(caption.style.background)}:boxborderw=18:x=${x}:y=${y}:enable='gte(t,${start})*lt(t,${finish})'[${next}]`);
     videoLabel = next;
   });
 
+  }
+  if(pass.audio!==false){
   const audibleTracks = sequence.tracks.filter((track) => track.type === "audio" || track.type === "video");
   const anySolo = audibleTracks.some((track) => track.solo);
   const audioInputs = inputs.filter((input) => input.media?.probe.hasAudio && (() => {
@@ -302,35 +313,122 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
     statements.push(labels.join("")+filters.join(",")+"["+label+"]");
     audioLabels.push("["+label+"]");
   }
-  let audioLabel = "aout";
+  const audioLabel = "aout";
   if (audioLabels.length > 0) statements.push(`${audioLabels.join("")}amix=inputs=${audioLabels.length}:duration=longest:normalize=0,atrim=duration=${durationSeconds},apad=whole_dur=${durationSeconds}[${audioLabel}]`);
-  else statements.push(`anullsrc=r=${project.settings.sampleRate}:cl=${project.settings.channels === 1 ? "mono" : "stereo"},atrim=duration=${durationSeconds}[${audioLabel}]`);
+  else statements.push(`anullsrc=r=${project.settings.sampleRate}:cl=${project.settings.channels === 1 ? "mono" : project.settings.channels === 6 ? "5.1" : "stereo"},atrim=duration=${durationSeconds}[${audioLabel}]`);
+  }
+  if(pass.video!==false){
   const outputWidth = maxWidth && width > maxWidth ? Math.max(2, Math.floor(maxWidth / 2) * 2) : width;
   const outputHeight = outputWidth !== width ? Math.max(2, Math.round(height * outputWidth / width / 2) * 2) : height;
-  statements.push(`[${videoLabel}]${outputWidth !== width ? `scale=${outputWidth}:${outputHeight}:flags=lanczos,` : ""}format=yuv420p[vout]`);
-  return { graph: statements.join(";\n"), videoLabel: "vout", audioLabel, durationTick: framesToTicks(frameCount, project.settings.fps), frameCount };
+  statements.push(`[${videoLabel}]${outputWidth !== width ? `scale=${outputWidth}:${outputHeight}:flags=lanczos,` : ""}format=yuv420p${pass.range?",trim=start="+ticksToSeconds(pass.range.startTick)+":end="+ticksToSeconds(pass.range.endTick)+",setpts=PTS-STARTPTS":""}[vout]`);
+  }
+  if(pass.cachedAudioInput!==undefined)statements.push("["+pass.cachedAudioInput+":a]asetpts=N/SR/TB[aout]");
+  if(pass.cachedVideoInput!==undefined)statements.push("["+pass.cachedVideoInput+":v]setpts=PTS-STARTPTS[vout]");
+  return { graph: statements.join(";\n"), videoLabel: "vout", audioLabel: "aout", durationTick: framesToTicks(frameCount, project.settings.fps), frameCount };
 }
 
+
+function visualClip(project:StudioProject,sequence:Sequence,clip:Clip):boolean{
+ if(!clip.enabled||sequence.tracks.find(track=>track.id===clip.trackId)?.hidden)return false;
+ if(clip.source.type==="sequence")throw new StudioException("NESTED_SEQUENCE_UNSUPPORTED","Render nested sequences to managed media before inserting them; nested clips are not silently omitted.","input");
+ return clip.source.type==="color"||clip.source.type==="animation"||clip.source.type==="media"&&project.media.some(media=>clip.source.type==="media"&&media.id===clip.source.mediaId&&(media.probe.hasVideo||media.kind==="image"));
+}
+function audibleClip(project:StudioProject,clip:Clip):boolean{return clip.enabled&&clip.source.type==="media"&&project.media.some(media=>clip.source.type==="media"&&media.id===clip.source.mediaId&&media.probe.hasAudio);}
+async function continuousAudio(project:StudioProject,sequence:Sequence,store:ProjectStore,config:StudioConfig,options:RenderOptions,scratch:string,mediaHashes:Map<string,string>){
+ const clips=sequence.clips.filter(clip=>audibleClip(project,clip)),ids=new Set(clips.map(clip=>clip.id));
+ const mediaIds=new Set(clips.flatMap(clip=>clip.source.type==="media"?[clip.source.mediaId]:[]));
+ const durationTick=framesToTicks(ticksToFrames(sequenceDuration(sequence),project.settings.fps,"ceil"),project.settings.fps);
+ const key=canonicalHash({durationTick,settings:{sampleRate:project.settings.sampleRate,channels:project.settings.channels},
+  clips:clips.map(({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})=>({id,trackId,source,startTick,durationTick,sourceInTick,playbackRate,enabled,audio})),
+  tracks:sequence.tracks.map(({id,type,muted,solo,gainDb,pan,effects})=>({id,type,muted,solo,gainDb,pan,effects})),
+  automation:sequence.automation,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
+  media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),renderer:8});
+ const cached=confinedPath(store.root,path.join(store.root,"cache","renders","audio-"+key+".wav"));
+ let hit=false;try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
+ if(!hit){
+  const inputs=await buildInputs(project,{...sequence,clips},store,config,options.signal,options.onProgress);
+  const graph=buildFilterGraph(project,sequence,inputs,new Map(),undefined,undefined,{video:false});
+  const graphPath=path.join(scratch,"continuous-audio.txt");await writeFile(graphPath,graph.graph,"utf8");
+  await ffmpegArtifact(config,[...inputs.flatMap(input=>input.args),await filterScriptOption(config.ffmpegPath),graphPath,"-map","["+graph.audioLabel+"]","-t",String(ticksToSeconds(durationTick)),"-c:a","pcm_f32le","-rf64","auto","-vn"],cached,{signal:options.signal,timeoutMs:24*60*60_000});
+  await writeJson(cached+".json",await sha256File(cached));
+ }
+ const pinned=path.join(scratch,"continuous-audio.wav");await link(cached,pinned).catch(()=>copyFile(cached,pinned));
+ await utimes(cached,new Date(),new Date()).catch(()=>undefined);
+ return{args:["-i",pinned],cacheHit:hit,renderKey:key};
+}
+interface CachedRange{startTick:number;endTick:number;renderKey:string;cacheHit:boolean}
+async function videoRanges(project:StudioProject,sequence:Sequence,store:ProjectStore,config:StudioConfig,options:RenderOptions,scratch:string,captionFiles:Map<string,string>,mediaHashes:Map<string,string>){
+ const totalFrames=ticksToFrames(sequenceDuration(sequence),project.settings.fps,"ceil");
+ const rangeFrames=Math.max(options.videoRangeFrames??Math.max(1,Math.round(10*project.settings.fps.numerator/project.settings.fps.denominator)),Math.ceil(totalFrames/3600));
+ const ranges:CachedRange[]=[],list:string[]=[];
+ const clips=sequence.clips.filter(clip=>visualClip(project,sequence,clip));
+ for(let startFrame=0;startFrame<totalFrames;startFrame+=rangeFrames){
+  options.signal?.throwIfAborted();
+  const startTick=framesToTicks(startFrame,project.settings.fps),endTick=framesToTicks(Math.min(totalFrames,startFrame+rangeFrames),project.settings.fps);
+  const owned=clips.filter(clip=>clip.startTick<endTick&&clip.startTick+clip.durationTick>startTick);
+  const ids=new Set(owned.map(clip=>clip.id)),mediaIds=new Set(owned.flatMap(clip=>clip.source.type==="media"?[clip.source.mediaId]:[]));
+  const animationIds=new Set(owned.flatMap(clip=>clip.source.type==="animation"?[clip.source.animationId]:[]));
+  const captions=sequence.captions.filter(caption=>caption.startTick<endTick&&caption.startTick+caption.durationTick>startTick);
+  const rangeSequence={...sequence,clips:owned,captions};
+  const key=canonicalHash({
+   startTick,endTick,clips:owned.map(({name,audio,groupId,linkedGroupId,...clip})=>clip),
+   tracks:sequence.tracks.filter(track=>owned.some(clip=>clip.trackId===track.id)||captions.some(caption=>caption.trackId===track.id)).map(({id,order,hidden,muted,type})=>({id,order,hidden,muted:type==="caption"?muted:undefined})),
+   captions,transitions:sequence.transitions.filter(transition=>ids.has(transition.fromClipId)||ids.has(transition.toClipId)),
+   settings:{raster:project.settings.raster,fps:project.settings.fps,background:project.settings.background,colorSpace:project.settings.colorSpace},
+   media:[...mediaIds].map(id=>({id,hash:mediaHashes.get(id)})),
+   animations:project.animations.filter(animation=>animationIds.has(animation.id)),
+   output:{maxWidth:options.maxWidth??null,defaultFontFile:config.defaultFontFile??null},renderer:8
+  });
+  const cached=confinedPath(store.root,path.join(store.root,"cache","renders","video-"+key+".mkv"));
+  let hit=false;
+  try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
+  if(!hit){
+   const inputs=await buildInputs(project,rangeSequence,store,config,options.signal,options.onProgress);
+   const compiled=buildFilterGraph(project,rangeSequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{audio:false,range:{startTick,endTick}});
+   const graphPath=path.join(scratch,"range-"+ranges.length+".txt");await writeFile(graphPath,compiled.graph,"utf8");
+   await ffmpegArtifact(config,[...inputs.flatMap(input=>input.args),await filterScriptOption(config.ffmpegPath),graphPath,"-map","["+compiled.videoLabel+"]","-frames:v",String(compiled.frameCount),"-c:v","ffv1","-level","3","-an"],cached,{signal:options.signal,timeoutMs:60*60_000});
+   await writeJson(cached+".json",await sha256File(cached));
+  }
+  await utimes(cached,new Date(),new Date()).catch(()=>undefined);
+  // Pin an immutable file for this render so concurrent cache pruning cannot remove its input.
+  const pinned=path.join(scratch,"range-"+ranges.length+".mkv");
+  await link(cached,pinned).catch(()=>copyFile(cached,pinned));
+  list.push("file 'range-"+ranges.length+".mkv'");
+  ranges.push({startTick,endTick,renderKey:key,cacheHit:hit});
+  options.onProgress?.(.05+.65*(startFrame+Math.min(rangeFrames,totalFrames-startFrame))/totalFrames,"Video range "+ranges.length+(hit?" reused":" rendered"));
+ }
+ const listPath=path.join(scratch,"video-ranges.ffconcat");await writeFile(listPath,"ffconcat version 1.0\n"+list.join("\n")+"\n","utf8");
+ return {args:["-f","concat","-safe","1","-i",listPath],ranges};
+}
 
 export async function renderSequence(store: ProjectStore, config: StudioConfig, options: RenderOptions): Promise<Record<string, unknown>> {
   const project = await store.read();
   if (options.expectedRevision !== undefined && project.revision !== options.expectedRevision) {
     throw new StudioException("REVISION_CONFLICT", `Preview requested for revision ${options.expectedRevision}, but the project is now revision ${project.revision}.`, "conflict", { expectedRevision: options.expectedRevision, actualRevision: project.revision });
   }
+  if(options.videoRangeFrames!==undefined&&(!Number.isSafeInteger(options.videoRangeFrames)||options.videoRangeFrames<0||options.videoRangeFrames>100000))throw new StudioException("INVALID_RENDER_RANGE","Video range frames must be an integer from 0 to 100000.","input");
   const sequence = prepareTransitionTimeline(project,sequenceById(project, options.sequenceId));
   const preset = presetById(project, options.presetId);
   const mediaIds = new Set(sequence.clips.flatMap((clip) => clip.source.type === "media" ? [clip.source.mediaId] : []));
   const animationIds = new Set(sequence.clips.flatMap((clip) => clip.source.type === "animation" ? [clip.source.animationId] : []));
+  const mediaHashes=new Map<string,string>();
+  for(const media of project.media.filter(asset=>mediaIds.has(asset.id))){
+   const source=mediaPath(store,media);
+   if(samePath(source,options.outputPath))throw new StudioException("SOURCE_OUTPUT_OVERWRITE","Export cannot overwrite a project media source.","input");
+   mediaHashes.set(media.id,(await sha256File(source,options.signal)).sha256);
+  }
+  confinedPath(store.root,path.join(store.root,"cache","renders"));
+
   const renderKey = canonicalHash({
     sequence,
     settings: project.settings,
     preset,
-    media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: asset.storage.sha256, offline: asset.offline ?? false })),
+    media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: mediaHashes.get(asset.id), offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
-    output: { maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
-    renderer: 7
+    output: { videoRangeFrames:options.videoRangeFrames??null, maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
+    renderer: 8
   });
-  const cachePath = path.join(store.root, "cache", "renders", `${renderKey}.${preset.container}`);
+  const cachePath = confinedPath(store.root,path.join(store.root,"cache","renders",renderKey+"."+preset.container));
   const durationTick = sequenceDuration(sequence);
   if (durationTick <= 0) throw new StudioException("EMPTY_SEQUENCE", "The sequence has no renderable duration.", "input");
   const frameCount = ticksToFrames(durationTick, project.settings.fps, "ceil");
@@ -339,10 +437,13 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
   const cached = await stat(cachePath).then((info) => info.isFile() && info.size > 0).catch(() => false);
   if (cached) {
     try {
+      const [metadata,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cachePath+".json")),sha256File(cachePath,options.signal)]);
+      if(metadata.sha256!==hash.sha256||metadata.bytes!==hash.bytes)throw new Error("Render cache checksum changed.");
+      const probe=await probeMedia(cachePath,config,options.signal);
       await publishFile(cachePath, options.outputPath);
       const now = new Date();
       await utimes(cachePath, now, now).catch(() => undefined);
-      const [probe, hash] = await Promise.all([probeMedia(options.outputPath, config, options.signal), sha256File(options.outputPath)]);
+
       options.onProgress?.(1, "Reused cached render");
       return {
         success: true, cacheHit: true, cachePath, outputPath: path.resolve(options.outputPath), projectId: project.projectId, revision: project.revision,
@@ -354,23 +455,30 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     }
   }
   const scratch = path.join(config.scratchDir, `render-${randomUUID()}`);
+  const output=path.resolve(options.outputPath);
+  const stagedOutput=path.join(path.dirname(output),"."+path.basename(output)+"."+randomUUID()+".review."+preset.container);
   await mkdir(scratch, { recursive: true });
   try {
     options.onProgress?.(0.01, "Planning render");
     if(sequence.captions.length)await requireFfmpegFilters(config.ffmpegPath,["drawtext"]);
-    const inputs = await buildInputs(project, sequence, store, config, options.signal, options.onProgress);
+    const audioOnly = preset.container === "wav";
+
     const captionFiles = new Map<string, string>();
     await Promise.all(sequence.captions.map(async (caption, index) => {
       const textPath = path.join(scratch, `caption-${index}.txt`);
       await writeFile(textPath, caption.text, "utf8");
       captionFiles.set(caption.id, textPath);
     }));
-    const compiled = buildFilterGraph(project, sequence, inputs, captionFiles, options.maxWidth, config.defaultFontFile);
+    const useRanges=!audioOnly&&options.videoRangeFrames!==0&&(options.videoRangeFrames!==undefined||ticksToSeconds(durationTick)>30||sequence.clips.filter(clip=>visualClip(project,sequence,clip)).length>32);
+    const cachedVideo=useRanges?await videoRanges(project,sequence,store,config,options,scratch,captionFiles,mediaHashes):undefined;
+    const cachedAudio=cachedVideo?await continuousAudio(project,sequence,store,config,options,scratch,mediaHashes):undefined;
+    const inputSequence=cachedVideo?{...sequence,clips:[]}:audioOnly?{...sequence,clips:sequence.clips.filter(clip=>audibleClip(project,clip))}:sequence;
+    const inputs=await buildInputs(project,inputSequence,store,config,options.signal,options.onProgress);
+    const compiled = buildFilterGraph(project,sequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{video:!audioOnly&&!cachedVideo,audio:!cachedAudio,...(cachedVideo?{cachedVideoInput:inputs.length}:{}),...(cachedAudio?{cachedAudioInput:inputs.length+1}:{})});
     const graphPath = path.join(scratch, "filter-complex.txt");
     await writeFile(graphPath, compiled.graph, "utf8");
-    const inputArgs = inputs.flatMap((input) => input.args);
-    const audioOnly = preset.container === "wav";
-    const graph = audioOnly ? compiled.graph + `;[${compiled.videoLabel}]nullsink` : compiled.graph;
+    const inputArgs = [...inputs.flatMap((input) => input.args),...(cachedVideo?.args??[]),...(cachedAudio?.args??[])];
+    const graph = compiled.graph;
     await writeFile(graphPath, graph, "utf8");
     const args = [
       ...inputArgs, await filterScriptOption(config.ffmpegPath), graphPath,
@@ -383,7 +491,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
       "-progress", "pipe:2"
     ];
     const totalSeconds = Math.max(1, ticksToSeconds(compiled.durationTick));
-    const result = await ffmpegArtifact(config, args, options.outputPath, {
+    const result = await ffmpegArtifact(config, args, stagedOutput, {
       signal: options.signal, timeoutMs: 24 * 60 * 60_000,
       onProgress: (progress) => {
         const microseconds = Number(progress.out_time_us);
@@ -391,17 +499,21 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
       }
     });
     options.onProgress?.(0.97, "Verifying output");
-    const [probe, hash] = await Promise.all([probeMedia(options.outputPath, config, options.signal), sha256File(options.outputPath)]);
-    await publishFile(options.outputPath, cachePath);
+    const [probe, hash] = await Promise.all([probeMedia(stagedOutput, config, options.signal), sha256File(stagedOutput,options.signal)]);
+    if(!probe.hasAudio||!audioOnly&&!probe.hasVideo||Math.abs(probe.durationTick-outputDurationTick)>Math.max(ticksPerFrame(project.settings.fps),ticksPerSample(project.settings.sampleRate)))throw new StudioException("INVALID_RENDER_OUTPUT","Rendered streams or duration do not match the requested sequence.","runtime");
+    for(const media of project.media.filter(asset=>mediaHashes.has(asset.id)))if((await sha256File(mediaPath(store,media),options.signal)).sha256!==mediaHashes.get(media.id))throw new StudioException("SOURCE_CHANGED_DURING_RENDER","A media source changed during rendering. The previous export was preserved; retry after the source is stable.","conflict");
+    await publishFile(stagedOutput, cachePath);
     await writeFile(`${cachePath}.json`, `${JSON.stringify({ renderKey, projectId: project.projectId, sequenceId: sequence.id, createdAt: new Date().toISOString(), presetId: preset.id, frameCount: compiled.frameCount, durationTick: outputDurationTick, sha256: hash.sha256, bytes: hash.bytes }, null, 2)}\n`, "utf8");
+    await rename(stagedOutput,output);
     const cache = await pruneRenderCache(store.root, config.cacheMaxBytes, cachePath);
     options.onProgress?.(1, "Completed");
     return {
       success: true, cacheHit: false, cachePath, outputPath: path.resolve(options.outputPath), projectId: project.projectId, revision: project.revision,
       sequenceId: sequence.id, renderKey, frameCount: compiled.frameCount, durationTick: outputDurationTick, probe, ...hash,
-      ffmpegCommand: { executable: config.ffmpegPath, args }, durationMs: result.durationMs, cache
+      videoRanges:cachedVideo?.ranges??[], audioCache:cachedAudio?{cacheHit:cachedAudio.cacheHit,renderKey:cachedAudio.renderKey}:null, ffmpegCommand: { executable: config.ffmpegPath, args }, durationMs: result.durationMs, cache
     };
   } finally {
+    await rm(stagedOutput,{force:true}).catch(()=>undefined);
     await rm(scratch, { recursive: true, force: true }).catch(() => undefined);
   }
 }

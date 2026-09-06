@@ -1,5 +1,6 @@
 import { randomUUID } from "node:crypto";
 import { defaultTransform, ticksPerSample, type AdvancedProjectCommand, type AnimationDocument, type Clip, type ProjectCommand, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
+import {spliceEnvelope} from "./envelope.js";
 import { StudioException } from "./errors.js";
 
 const kinds = new Set(["clip.slip", "clip.roll", "clip.slide", "gap.remove", "audio.gain.range", "animation.node.add", "animation.node.update", "animation.node.remove", "animation.operation.add", "animation.operation.update", "animation.operation.remove", "animation.operations.reorder"]);
@@ -85,9 +86,11 @@ export function expandAdvancedCommand(project: StudioProject, command: AdvancedP
     } else {
       const track = sequence.tracks.find(item => item.id === command.targetId); if (!track || track.locked) fail("Select an unlocked track.");
     }
-    return [{ type: "automation.set", sequenceId: sequence.id, lane: { id: command.laneId ?? randomUUID(), sequenceId: sequence.id, enabled: true,
-      target: command.targetType + ":" + command.targetId + ":gainDbOffset",
-      points: [...(start ? [{ tick: 0, value: 0, curve: "hold" as const }] : []), { tick: start, value: command.gainDb, curve: "hold" }, { tick: end, value: 0, curve: "hold" }] } }];
+    const target=command.targetType+":"+command.targetId+":gainDbOffset";
+    const existing=command.laneId?sequence.automation.find(lane=>lane.id===command.laneId):undefined;
+    if(existing&&existing.target!==target)fail("The selected automation lane belongs to another target.");
+    return [{type:"automation.set",sequenceId:sequence.id,lane:{id:command.laneId??randomUUID(),sequenceId:sequence.id,enabled:existing?.enabled??true,target,
+      points:spliceEnvelope(existing?.points??[],start,end,command.gainDb,sample)}}];
   }
   if (command.type === "gap.remove") {
     const start = integer(command.startTick), end = integer(command.endTick);
