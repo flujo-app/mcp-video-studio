@@ -31,7 +31,7 @@ export function createDefaultProject(name: string): StudioProject {
   const tracks = [defaultTrack(sequenceId, "video", 0, "Video 1"), defaultTrack(sequenceId, "audio", 1, "Audio 1"), defaultTrack(sequenceId, "caption", 2, "Captions")];
   const sequence: Sequence = { id: sequenceId, name: "Main sequence", tracks, clips: [], transitions: [], automation: [], markers: [], captions: [] };
   return {
-    schemaVersion: 1, projectId: crypto.randomUUID(), revision: 0, name, timebase: TICKS_PER_SECOND,
+    schemaVersion: 2, projectId: crypto.randomUUID(), revision: 0, name, timebase: TICKS_PER_SECOND,
     settings: { fps: { numerator: 30, denominator: 1 }, raster: { width: 1920, height: 1080 }, sampleRate: 48000, channels: 2, colorSpace: "rec709", background: "#000000" },
     media: [], sequences: [sequence], animations: [], generatedArtifacts: [], exportPresets: DEFAULT_EXPORT_PRESETS.map((preset) => ({ ...preset })),
     activeSequenceId: sequenceId, createdAt: now, updatedAt: now

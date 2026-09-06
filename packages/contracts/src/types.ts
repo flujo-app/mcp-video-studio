@@ -295,7 +295,7 @@ export interface ExportPreset {
 }
 
 export interface StudioProject {
-  schemaVersion: 1;
+  schemaVersion: 2;
   projectId: UUID;
   revision: number;
   name: string;
@@ -378,6 +378,7 @@ export type ProjectCommand =
   | { type: "clip.move"; sequenceId: UUID; clipIds: UUID[]; targetTrackId: UUID; startTick: number; ripple: boolean }
   | { type: "clip.trim"; sequenceId: UUID; clipId: UUID; edge: "in" | "out"; tick: number; ripple: boolean }
   | { type: "clip.split"; sequenceId: UUID; clipId: UUID; atTick: number; rightClipId: UUID }
+  | { type: "clip.relate"; sequenceId: UUID; clipIds: UUID[]; relation: "group" | "link"; relationshipId: UUID | null }
   | { type: "clip.remove"; sequenceId: UUID; clipIds: UUID[]; ripple: boolean }
   | { type: "clip.update"; sequenceId: UUID; clipId: UUID; patch: Partial<Pick<Clip, "name" | "sourceInTick" | "durationTick" | "playbackRate" | "enabled" | "transform" | "crop" | "blendMode" | "effects" | "audio" | "linkedGroupId" | "groupId">> }
   | { type: "transition.add"; sequenceId: UUID; transition: Transition }

@@ -37,3 +37,15 @@ it("rejects oversized JSON documents before parsing or allocating their body",as
  const handle=await open(file,"w");try{await handle.truncate(64*1024*1024+1);}finally{await handle.close();}
  await expect(readJson(file)).rejects.toThrow("64 MiB");
 });
+
+it("upgrades schema 1 only on commit, preserves a recovery copy, and prevents old readers accepting new cursor semantics",async()=>{
+ const {store}=await fixture(),file=path.join(store.root,"project.json"),legacy={...await store.read(),schemaVersion:1};
+ await writeFile(file,JSON.stringify(legacy));
+ expect((await store.read()).schemaVersion).toBe(2);
+ expect(JSON.parse(await readFile(file,"utf8")).schemaVersion).toBe(1);
+ await store.mutate(0,[{type:"project.rename",name:"Migrated"}]);
+ expect(JSON.parse(await readFile(file,"utf8")).schemaVersion).toBe(2);
+ expect(JSON.parse(await readFile(path.join(store.root,"history","schema1-project.json"),"utf8"))).toEqual(legacy);
+ await new ProjectStore(store.root).undo(1);
+ expect((await store.read()).name).toBe("Original");
+});

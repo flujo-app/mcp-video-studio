@@ -436,3 +436,11 @@
 @media(prefers-reduced-motion:reduce){*,*::before,*::after{animation-duration:.001ms!important;transition-duration:.001ms!important;scroll-behavior:auto!important}}
 @media(forced-colors:active){button,input,textarea,select,.timeline-clip,.caption-block{border:1px solid ButtonText!important}.selected{outline:3px solid Highlight!important}.status-dot{background:Highlight!important}}
 @media(max-width:1000px){html,body,#root{height:auto;min-height:100%;overflow:auto}.app-shell{height:auto;min-height:100vh;display:block}.workspace{display:flex;flex-direction:column}.media-bin,.inspector{max-height:28rem;overflow:auto}.center-stage{min-height:35rem}.generation-layout,.project-grid{grid-template-columns:1fr}.topbar{position:sticky;top:0}.project-title{min-width:0}.status{display:none}}
+
+.selection-tools{display:flex;flex-wrap:wrap;align-items:center;gap:.3rem;padding:.4rem;max-height:9rem;overflow:auto;border-bottom:1px solid var(--line);font-size:.75rem;flex-shrink:0}
+.selection-tools label{display:flex;align-items:center;gap:.25rem}.selection-tools input{width:5rem}.selection-tools button{padding:.3rem;background:#202938;border:1px solid #48566a;border-radius:4px}.selection-tools button:disabled{opacity:.45}
+.track-labels{width:200px}.track-label{flex-wrap:wrap;align-content:center}.track-controls{display:flex;gap:3px;width:100%;justify-content:flex-end}.track-controls button[aria-pressed=true]{color:#ffbc5d;border-color:#805f30}
+.timeline-marker{position:absolute;top:5px;border:0;background:transparent;color:#ffb547;z-index:9;padding:0;line-height:1}
+.timeline-toolbar{height:auto;min-height:39px;flex-wrap:wrap;gap:.4rem}.timeline-toolbar input[type=checkbox]{width:auto}
+
+.inspector fieldset>button{background:#263348;color:#ffffff;border:1px solid #56657c;border-radius:4px}

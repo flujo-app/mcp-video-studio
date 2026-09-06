@@ -59,7 +59,7 @@ export class ProjectStore {
     }
     await Promise.all(["assets", "fonts", "proxies", "cache", "history/transactions", "jobs", "exports"].map((directory) => mkdir(path.join(store.root, directory), { recursive: true })));
     const project = validateProject(createDefaultProject(name));
-    await writeJson(projectFile(store.root), project);
+    await writeJson(projectFile(store.root), {...project,_history:{past:[],future:[]}});
     return store;
   }
 
@@ -107,7 +107,7 @@ export class ProjectStore {
       if (!restored) throw new StudioException("NOTHING_TO_UNDO", "There is no transaction to undo.", "input");
       restored.project.revision = current.revision + 1;
       restored.project.updatedAt = new Date().toISOString();
-      validateProject(restored.project);
+      restored.project=validateProject(restored.project);
       await commitProject(this.root, restored.project, restored.state);
       return { success: true, projectId: current.projectId, revision: restored.project.revision, transactionId: `undo:${restored.transactionId}`, changed: changedEverything(restored.project), warnings: [] };
     });
@@ -121,7 +121,7 @@ export class ProjectStore {
       if (!restored) throw new StudioException("NOTHING_TO_REDO", "There is no transaction to redo.", "input");
       restored.project.revision = current.revision + 1;
       restored.project.updatedAt = new Date().toISOString();
-      validateProject(restored.project);
+      restored.project=validateProject(restored.project);
       await commitProject(this.root, restored.project, restored.state);
       return { success: true, projectId: current.projectId, revision: restored.project.revision, transactionId: `redo:${restored.transactionId}`, changed: changedEverything(restored.project), warnings: [] };
     });

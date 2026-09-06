@@ -133,3 +133,11 @@ export function filterScriptOption(executable: string): Promise<string> {
   }
   return choice;
 }
+
+const filterCapabilities=new Map<string,Promise<Set<string>>>();
+export async function requireFfmpegFilters(executable:string,names:string[]):Promise<void>{
+ let pending=filterCapabilities.get(executable);
+ if(!pending){pending=runChecked(executable,["-hide_banner","-filters"],{timeoutMs:10000,maxOutputChars:500000}).then(result=>new Set((result.stdout+"\n"+result.stderr).split(/\r?\n/).map(line=>line.trim().split(/\s+/)[1]??""))).catch(error=>{filterCapabilities.delete(executable);throw error;});filterCapabilities.set(executable,pending);}
+ const available=await pending,missing=names.filter(name=>!available.has(name));
+ if(missing.length)throw new StudioException("FFMPEG_CAPABILITY_MISSING","Installed FFmpeg lacks "+missing.join(", ")+". Install a full FFmpeg build; on macOS use brew install ffmpeg-full and select its bin directory with VIDEO_STUDIO_FFMPEG_PATH.","dependency",{missing});
+}

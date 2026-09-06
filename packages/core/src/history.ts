@@ -11,6 +11,7 @@ export async function loadHistoryState(root:string):Promise<HistoryState>{
   const document=await readJson<StudioProject&{_history?:HistoryState}>(path.join(root,"project.json"));
   let state=document._history;
   if(!state){
+    if(document.schemaVersion===2)throw new StudioException("INVALID_HISTORY","Schema 2 project is missing its atomic history cursor; preserve it for recovery.","runtime");
     const file=path.join(root,"history","state.json");
     if(!await stat(file).catch(()=>undefined))return{past:[],future:[]};
     state=await readJson<HistoryState>(file);
@@ -29,6 +30,11 @@ export async function commitProject(root:string,project:StudioProject,state:Hist
 export async function recordHistory(root:string,entry:HistoryEntry):Promise<void>{
   await mkdir(path.dirname(entryPath(root,entry.id)),{recursive:true});
   const state=await loadHistoryState(root);
+  const document=await readJson<Record<string,unknown>>(path.join(root,"project.json"));
+  if(document.schemaVersion===1){
+    const backup=confinedPath(root,path.join(root,"history","schema1-project.json"));
+    if(!await stat(backup).catch(()=>undefined))await writeJson(backup,document);
+  }
   await writeJson(entryPath(root,entry.id),entry);
   await commitProject(root,entry.after,{past:[...state.past,entry.id].slice(-200),future:[]});
 }

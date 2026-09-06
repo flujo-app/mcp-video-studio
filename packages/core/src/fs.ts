@@ -61,6 +61,7 @@ export async function ensureInside(root: string, candidate: string): Promise<str
 }
 
 export async function writeJson(filePath: string, value: unknown): Promise<void> {
+  if(Buffer.byteLength(JSON.stringify(value))>64*1024*1024)throw new StudioException("JSON_SIZE_LIMIT","JSON documents and history entries are limited to 64 MiB.","input");
   await atomicWrite(filePath, `${JSON.stringify(value, null, 2)}\n`);
 }
 

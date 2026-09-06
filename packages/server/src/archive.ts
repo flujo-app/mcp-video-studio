@@ -7,7 +7,7 @@ import type { StudioProject } from "@mcp-video-studio/contracts";
 const MAGIC=Buffer.from("MCPSTUDIO001\n");
 const MAX_BYTES=20*1024*1024*1024,MAX_MANIFEST=16*1024*1024;
 interface Entry{path:string;bytes:number;sha256:string}
-interface Manifest{format:"mcp-video-studio-archive";version:1;project:StudioProject;files:Entry[]}
+interface Manifest{sourceSchemaVersion?:number;format:"mcp-video-studio-archive";version:1;project:StudioProject;files:Entry[]}
 function samePath(a:string,b:string){return process.platform==="win32"?path.resolve(a).toLowerCase()===path.resolve(b).toLowerCase():path.resolve(a)===path.resolve(b);}
 function fail(message:string):never{throw new StudioException("INVALID_ARCHIVE",message,"input");}
 function safeEntry(entry:Entry):void{if(!entry.path.startsWith("assets/")||entry.path.includes("\\")||entry.path.includes(":")||entry.path.split("/").some(s=>!s||s==="."||s==="..")||!Number.isSafeInteger(entry.bytes)||entry.bytes<0||!/^[a-f0-9]{64}$/.test(entry.sha256))fail("Archive contains an invalid media entry.");}
@@ -42,7 +42,7 @@ export async function exportProjectArchive(projectPath:string,outputPath:string,
 }
 async function readExact(handle:Awaited<ReturnType<typeof open>>,bytes:number):Promise<Buffer>{const result=Buffer.alloc(bytes);let offset=0;while(offset<bytes){const read=await handle.read(result,offset,bytes-offset,null);if(!read.bytesRead)fail("Archive ended unexpectedly.");offset+=read.bytesRead;}return result;}
 export async function inspectProjectArchive(filePath:string):Promise<Record<string,unknown>>{
- const handle=await open(path.resolve(filePath),"r");try{const manifest=await readManifest(handle);return{success:true,format:manifest.format,version:manifest.version,projectName:manifest.project.name,projectId:manifest.project.projectId,revision:manifest.project.revision,mediaCount:manifest.files.length,totalMediaBytes:manifest.files.reduce((n,f)=>n+f.bytes,0),migration:{sourceSchemaVersion:1,targetSchemaVersion:1,changes:[],history:"Archive imports start a fresh undo history."}};}finally{await handle.close();}
+ const handle=await open(path.resolve(filePath),"r");try{const manifest=await readManifest(handle);return{success:true,format:manifest.format,version:manifest.version,projectName:manifest.project.name,projectId:manifest.project.projectId,revision:manifest.project.revision,mediaCount:manifest.files.length,totalMediaBytes:manifest.files.reduce((n,f)=>n+f.bytes,0),migration:{sourceSchemaVersion:manifest.sourceSchemaVersion??manifest.project.schemaVersion,targetSchemaVersion:2,changes:manifest.sourceSchemaVersion===1?["Upgrade schema 1 to atomic-history schema 2"]:[],history:"Archive imports start a fresh undo history."}};}finally{await handle.close();}
 }
 async function readManifest(handle:Awaited<ReturnType<typeof open>>):Promise<Manifest>{
  const prefix=await readExact(handle,MAGIC.length+4);if(!prefix.subarray(0,MAGIC.length).equals(MAGIC))fail("Unsupported archive signature.");
@@ -52,7 +52,7 @@ async function readManifest(handle:Awaited<ReturnType<typeof open>>):Promise<Man
  const project=validateProject(raw.project);const paths=new Set<string>();let total=0;
  for(const entry of raw.files){safeEntry(entry);const key=entry.path.toLowerCase();if(paths.has(key))fail("Duplicate archive path.");paths.add(key);total+=entry.bytes;if(total>MAX_BYTES)fail("Archive exceeds 20 GiB.");}
  for(const media of project.media){if(media.storage.mode!=="managed")fail("Archives cannot reference external media.");const storage=media.storage,entry=raw.files.find(f=>f.path===storage.relativePath);if(!entry||entry.sha256!==storage.sha256||entry.bytes!==storage.bytes)fail("Archive media manifest does not match its project.");}
- return{...raw,project};
+ return{...raw,sourceSchemaVersion:raw.project.schemaVersion,project};
 }
 export async function importProjectArchive(filePath:string,destinationPath:string):Promise<Record<string,unknown>>{
  const destination=path.resolve(destinationPath);

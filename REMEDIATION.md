@@ -36,3 +36,19 @@ OpenAI's [file transcription guide](https://developers.openai.com/api/docs/guide
 ## Remaining acceptance
 
 The exact 24 acceptance criteria and their evidence are tracked in the remediation progress record. Further code work includes full timeline multi-selection/ripple controls, mixer/effect controls, partial generation regions and complete human version review, animation operation/keyframe editing, QC navigation, broader finishing formats, long-project virtualization/cache invalidation, fault coverage and all five acceptance productions. These are pending implementation/testing, not external blockers. Independent unfamiliar-user/screen-reader evaluation and account-backed generation require human/provider access. This branch must not be labeled v1.0.0 while those gates remain open.
+
+## Editor and format continuation
+
+The editor now supports multiple selection, copy/paste/duplicate, group/link edits,
+track mute/solo/lock/visibility/reorder/height, and viewport-limited clip/ruler DOM.
+Linked splits create a distinct right-hand relationship; their automation follows
+subsequent moves. Ripple insertion splits spanning clips; deletion rejects any
+unselected content in the removed interval and locked affected tracks reject
+the complete transaction.
+
+Project schema 2 makes the embedded undo cursor mandatory. Schema 1 projects
+remain readable and upgrade on the first committed edit, with a recovery copy at
+history/schema1-project.json. Older binaries reject schema 2 instead of silently
+using obsolete history state. Use an archive backup before changing versions;
+downgrading requires a separate export/conversion, not editing the version number.
+Archive inspection reports the source and target schema versions.

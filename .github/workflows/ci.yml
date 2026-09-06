@@ -34,7 +34,9 @@ jobs:
         run: choco install ffmpeg --yes --no-progress
       - name: Install FFmpeg on macOS
         if: runner.os == 'macOS'
-        run: command -v ffmpeg || brew install ffmpeg
+        run: |
+          brew install ffmpeg-full
+          printf "%s/bin\n" "$(brew --prefix ffmpeg-full)" >> "$GITHUB_PATH"
       - run: npx patchright install --with-deps chromium
       - run: npm run check
       - name: Real render, browser, security and failure acceptance

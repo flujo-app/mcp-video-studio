@@ -1,4 +1,4 @@
-import { StudioProjectSchema, ticksPerFrame, type Clip, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
+import { StudioProjectSchema, ticksPerSample, ticksPerFrame, type Clip, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import { StudioException } from "./errors.js";
 
 function clipEnd(clip: Clip): number {
@@ -11,6 +11,8 @@ export function sequenceDuration(sequence: Sequence): number {
 }
 
 export function validateProject(project: StudioProject): StudioProject {
+  // Schema 1 is read-compatible. The first committed edit upgrades the on-disk format.
+  if((project as unknown as {schemaVersion:number}).schemaVersion===1)project={...project,schemaVersion:2};
   const parsed = StudioProjectSchema.safeParse(project);
   if (!parsed.success) {
     throw new StudioException("INVALID_PROJECT", "Project validation failed.", "input", {
@@ -32,6 +34,15 @@ export function validateProject(project: StudioProject): StudioProject {
       if ((track.type === "video" || track.type === "overlay" || track.type === "caption") && (clip.startTick % frameTick !== 0 || clip.durationTick % frameTick !== 0)) {
         throw new StudioException("VIDEO_GRID_MISMATCH", `Clip ${clip.id} is not aligned to the project frame grid.`, "input", { clipId: clip.id, frameTick });
       }
+      const rate=clip.playbackRate.numerator/clip.playbackRate.denominator;
+      if(!(rate>0)||rate>100)throw new StudioException("INVALID_SPEED","Clip playback rate must be greater than zero and at most 100.","input");
+      let sourceDuration:number|undefined;
+      if(clip.source.type==="media"){
+        const source=normalized.media.find(item=>clip.source.type==="media"&&item.id===clip.source.mediaId);
+        if(source&&source.kind!=="image")sourceDuration=source.probe.durationTick;
+      }else if(clip.source.type==="animation")sourceDuration=normalized.animations.find(item=>clip.source.type==="animation"&&item.id===clip.source.animationId)?.durationTick;
+      if(sourceDuration!==undefined&&clip.sourceInTick+Math.round(clip.durationTick*rate)>sourceDuration+ticksPerSample(normalized.settings.sampleRate))throw new StudioException("SOURCE_HANDLES","Clip trim or speed exceeds available source media.","input",{clipId:clip.id});
+      if(clip.crop.left+clip.crop.right>=1||clip.crop.top+clip.crop.bottom>=1)throw new StudioException("INVALID_CROP","Crop must leave a visible positive area.","input");
       if (clip.source.type === "media" && !mediaIds.has(clip.source.mediaId)) throw new StudioException("MISSING_MEDIA", `Clip ${clip.id} references unknown media ${clip.source.mediaId}.`, "input");
       if (clip.source.type === "animation" && !animationIds.has(clip.source.animationId)) throw new StudioException("MISSING_ANIMATION", `Clip ${clip.id} references unknown animation ${clip.source.animationId}.`, "input");
       if (clip.source.type === "sequence" && (!sequenceIds.has(clip.source.sequenceId) || clip.source.sequenceId === sequence.id)) throw new StudioException("INVALID_NESTED_SEQUENCE", `Clip ${clip.id} has an invalid nested sequence.`, "input");

@@ -161,7 +161,7 @@ const generatedArtifactSchema = z.object({
 });
 
 export const StudioProjectSchema = z.object({
-  schemaVersion: z.literal(1),
+  schemaVersion: z.literal(2),
   projectId: id,
   revision: safeInteger.nonnegative(),
   name: z.string().min(1).max(200),

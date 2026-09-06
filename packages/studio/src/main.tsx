@@ -21,6 +21,7 @@ import {
   type Track,
   type Transform
 } from "@mcp-video-studio/contracts";
+import { SelectionTools, useModalFocus } from "./timeline-tools.js";
 import "./styles.css";
 import "./layout-fixes.css";
 import {
@@ -78,6 +79,8 @@ function App() {
   const [projectPath, setProjectPath] = useState(new URLSearchParams(location.search).get("projectPath") || localStorage.getItem("mcp-video-studio:lastProject") || "");
   const [project, setProject] = useState<StudioProject>();
   const [selectedClipId, setSelectedClipId] = useState<string>();
+  const [selectedClipIds,setSelectedClipIds]=useState<string[]>([]);
+  const selectClips=(ids:string[])=>{setSelectedClipIds(ids);setSelectedClipId(ids.at(-1));setSelectedCaptionId(undefined);};
   const [selectedCaptionId, setSelectedCaptionId] = useState<string>();
   const [playhead, setPlayhead] = useState(0);
   const [zoom, setZoom] = useState(72);
@@ -89,6 +92,7 @@ function App() {
   const [showWorkflow, setShowWorkflow] = useState(false);
   const [pendingCommands, setPendingCommands] = useState<ProjectCommand[]>([]);
   const [showGeneration, setShowGeneration] = useState(false);
+  useModalFocus(showProjects||showWorkflow||showGeneration);
   const projectPathRef = useRef(projectPath);
   useEffect(() => { projectPathRef.current = projectPath; }, [projectPath]);
 
@@ -112,7 +116,7 @@ function App() {
     try {
       setError(""); setNotice("Opening project…");
       const result = await api<{ project: StudioProject }>(`/api/project?projectPath=${encodeURIComponent(nextPath)}`);
-      setProject(result.project); setProjectPath(nextPath); setSelectedClipId(undefined); setSelectedCaptionId(undefined); setShowProjects(false); setCachedPreviewRevision(undefined);
+      setProject(result.project); setProjectPath(nextPath); setSelectedClipIds([]);setSelectedClipId(undefined); setSelectedCaptionId(undefined); setShowProjects(false); setCachedPreviewRevision(undefined);
       localStorage.setItem("mcp-video-studio:lastProject", nextPath); setNotice("Project loaded");
     } catch (caught) { setError(caught instanceof Error ? caught.message : String(caught)); setShowProjects(true); }
   }, []);
@@ -153,8 +157,8 @@ function App() {
     if (!project || !sequence) return;
     const track = sequence.tracks.find((item) => media.kind === "audio" ? item.type === "audio" : item.type === "video" || item.type === "overlay");
     if (!track) { setError(`Add a ${media.kind === "audio" ? "audio" : "video"} track first.`); return; }
-    const rawDuration = media.kind === "image" ? secondsToTicks(5) : Math.max(media.probe.durationTick, secondsToTicks(1));
-    const duration = track.type === "audio" ? rawDuration : framesToTicks(ticksToFrames(rawDuration, project.settings.fps, "ceil"), project.settings.fps);
+    const rawDuration = media.kind === "image" ? secondsToTicks(5) : media.probe.durationTick;
+    const duration = track.type === "audio" ? rawDuration : framesToTicks(Math.max(1,ticksToFrames(rawDuration, project.settings.fps, "floor")), project.settings.fps);
     const clip = defaultClip(track.id, { type: "media", mediaId: media.id }, media.name, duration);
     clip.startTick = framesToTicks(ticksToFrames(playhead, project.settings.fps, "round"), project.settings.fps);
     setSelectedClipId(clip.id);
@@ -216,8 +220,8 @@ function App() {
   const removeSelected = async () => {
     if (!sequence) return;
     if (selectedClip) {
-      setSelectedClipId(undefined);
-      await mutate([{ type: "clip.remove", sequenceId: sequence.id, clipIds: [selectedClip.id], ripple: false }]);
+      setSelectedClipId(undefined);setSelectedClipIds([]);
+      await mutate([{ type: "clip.remove", sequenceId: sequence.id, clipIds: selectedClipIds.length?selectedClipIds:[selectedClip.id], ripple: false }]);
     } else if (selectedCaption) {
       setSelectedCaptionId(undefined);
       await mutate([{ type: "caption.remove", sequenceId: sequence.id, captionIds: [selectedCaption.id] }]);
@@ -287,7 +291,7 @@ function App() {
       <MediaBin project={project} projectPath={projectPath} artifactVersion={artifactVersion} onProject={setProject} onImportError={setError} onAdd={addMediaClip} />
       <section className="center-stage">
         <Preview project={project} projectPath={projectPath} sequence={sequence} selectedClip={selectedClip} selectedMedia={selectedMedia} playhead={playhead} ready={previewReady} busy={previewBusy} onBuild={buildPreview} onPlayhead={setPlayhead} />
-        <Timeline project={project} projectPath={projectPath} artifactVersion={artifactVersion} sequence={sequence} selectedClipId={selectedClipId} selectedCaptionId={selectedCaptionId} playhead={playhead} zoom={zoom} onZoom={setZoom} onPlayhead={setPlayhead} onSelect={(id) => { setSelectedClipId(id); setSelectedCaptionId(undefined); }} onSelectCaption={(id) => { setSelectedCaptionId(id); setSelectedClipId(undefined); }} onMove={moveClip} onMutate={mutate} />
+        <Timeline project={project} projectPath={projectPath} artifactVersion={artifactVersion} sequence={sequence} selectedClipId={selectedClipId} selectedClipIds={selectedClipIds} onSelectClips={selectClips} selectedCaptionId={selectedCaptionId} playhead={playhead} zoom={zoom} onZoom={setZoom} onPlayhead={setPlayhead} onSelect={(id) => { selectClips([id]); }} onSelectCaption={(id) => { setSelectedCaptionId(id); setSelectedClipId(undefined);setSelectedClipIds([]); }} onMove={moveClip} onMutate={mutate} />
       </section>
       {selectedCaption && project && sequence ? <CaptionInspector project={project} sequence={sequence} caption={selectedCaption} onMutate={mutate} /> : <Inspector project={project} sequence={sequence} clip={selectedClip} jobs={jobs} projectPath={projectPath} onUpdate={updateSelected} onMutate={mutate} onError={setError} />}
     </main>
@@ -370,11 +374,26 @@ function Preview({ project, projectPath, sequence, selectedClip, selectedMedia, 
   </div><div className="transport"><button aria-label="Previous frame" title="Previous frame" disabled={!ready} onClick={() => step(-1)}>◀</button><button aria-label="Play or pause" title="Play or pause" disabled={!project || busy} onClick={() => void togglePlayback()}>{busy ? "…" : playing ? "Ⅱ" : "▶"}</button><button aria-label="Next frame" title="Next frame" disabled={!ready} onClick={() => step(1)}>▶|</button><code>{project ? formatTimecode(playhead, project.settings.fps) : "00:00:00:00"}</code><span>{sequence?.name ?? "No sequence"}</span></div></section>;
 }
 
-function Timeline({ project, projectPath, artifactVersion, sequence, selectedClipId, selectedCaptionId, playhead, zoom, onZoom, onPlayhead, onSelect, onSelectCaption, onMove, onMutate }: { project: StudioProject | undefined; projectPath: string; artifactVersion: number; sequence: Sequence | undefined; selectedClipId: string | undefined; selectedCaptionId: string | undefined; playhead: number; zoom: number; onZoom(value: number): void; onPlayhead(value: number): void; onSelect(id: string): void; onSelectCaption(id: string): void; onMove(id: string, track: Track, tick: number): Promise<void>; onMutate(commands: ProjectCommand[]): Promise<void> }) {
+function Timeline({ project, projectPath, artifactVersion, sequence, selectedClipIds, onSelectClips, selectedClipId, selectedCaptionId, playhead, zoom, onZoom, onPlayhead, onSelect, onSelectCaption, onMove, onMutate }: { project: StudioProject | undefined; projectPath: string; artifactVersion: number; sequence: Sequence | undefined; selectedClipIds: string[]; onSelectClips(ids:string[]):void; selectedClipId: string | undefined; selectedCaptionId: string | undefined; playhead: number; zoom: number; onZoom(value: number): void; onPlayhead(value: number): void; onSelect(id: string): void; onSelectCaption(id: string): void; onMove(id: string, track: Track, tick: number): Promise<void>; onMutate(commands: ProjectCommand[]): Promise<void> }) {
   const [dragId, setDragId] = useState<string>();
   const [snapping, setSnapping] = useState(true);
   const [trimEdit, setTrimEdit] = useState<{ clipId: string; edge: "in" | "out"; originalTick: number; currentTick: number }>();
-  const durationSeconds = Math.max(60, ...(sequence ? [...sequence.clips.map((clip) => ticksToSeconds(clip.startTick + clip.durationTick) + 5), ...sequence.captions.map((caption) => ticksToSeconds(caption.startTick + caption.durationTick) + 5)] : [60]));
+  const scrollRef=useRef<HTMLDivElement>(null);
+  const [viewport,setViewport]=useState({left:0,width:1200});
+  const [trackHeight,setTrackHeight]=useState(84);
+  const [ripple,setRipple]=useState(false);
+  const selected=new Set(selectedClipIds.length?selectedClipIds:selectedClipId?[selectedClipId]:[]);
+  const select=(id:string,additive=false)=>onSelectClips(additive?(selected.has(id)?[...selected].filter(item=>item!==id):[...selected,id]):[id]);
+  useEffect(()=>{const element=scrollRef.current;if(!element)return;const resize=new ResizeObserver(()=>setViewport({left:element.scrollLeft,width:element.clientWidth}));resize.observe(element);return()=>resize.disconnect();},[]);
+  const durationSeconds=sequence?[...sequence.clips,...sequence.captions].reduce((max,item)=>Math.max(max,ticksToSeconds(item.startTick+item.durationTick)+5),60):60;
+  const visibleStart=Math.max(0,(viewport.left-500)/zoom),visibleEnd=(viewport.left+viewport.width+500)/zoom;
+  const visible=(start:number,duration:number)=>ticksToSeconds(start+duration)>=visibleStart&&ticksToSeconds(start)<=visibleEnd;
+  const moveSelection=async(id:string,track:Track,tick:number)=>{
+    if(!sequence)return;
+    const ids=selected.has(id)?[...selected]:[id],clip=sequence.clips.find(item=>item.id===id);
+    const first=Math.min(...sequence.clips.filter(item=>ids.includes(item.id)).map(item=>item.startTick));
+    await onMutate([{type:"clip.move",sequenceId:sequence.id,clipIds:ids,targetTrackId:track.id,startTick:Math.max(0,first+tick-(clip?.startTick??first)),ripple}]);
+  };
   const width = durationSeconds * zoom;
   const frameTick = project ? framesToTicks(1, project.settings.fps) : secondsToTicks(1 / 30);
   const snapTick = useCallback((tick: number, ignoreClipId?: string) => {
@@ -391,7 +410,7 @@ function Timeline({ project, projectPath, artifactVersion, sequence, selectedCli
     return closest;
   }, [playhead, project, sequence, snapping, zoom]);
   const beginTrim = (event: React.PointerEvent, clip: Clip, edge: "in" | "out") => {
-    event.preventDefault(); event.stopPropagation(); onSelect(clip.id);
+    event.preventDefault(); event.stopPropagation(); select(clip.id);
     const startClientX = event.clientX;
     const originalTick = edge === "in" ? clip.startTick : clip.startTick + clip.durationTick;
     let currentTick = originalTick;
@@ -405,7 +424,7 @@ function Timeline({ project, projectPath, artifactVersion, sequence, selectedCli
     const finish = () => {
       window.removeEventListener("pointermove", move); window.removeEventListener("pointerup", finish);
       setTrimEdit(undefined);
-      if (sequence && currentTick !== originalTick) void onMutate([{ type: "clip.trim", sequenceId: sequence.id, clipId: clip.id, edge, tick: currentTick, ripple: false }]);
+      if (sequence && currentTick !== originalTick) void onMutate([{ type: "clip.trim", sequenceId: sequence.id, clipId: clip.id, edge, tick: currentTick, ripple }]);
     };
     window.addEventListener("pointermove", move); window.addEventListener("pointerup", finish, { once: true });
   };
@@ -415,7 +434,7 @@ function Timeline({ project, projectPath, artifactVersion, sequence, selectedCli
     const original = edge === "in" ? clip.startTick : clip.startTick + clip.durationTick;
     const raw = original + (event.key === "ArrowLeft" ? -frameTick : frameTick) * (event.shiftKey ? 10 : 1);
     const bounded = edge === "in" ? Math.max(0, Math.min(raw, clip.startTick + clip.durationTick - frameTick)) : Math.max(clip.startTick + frameTick, raw);
-    void onMutate([{ type: "clip.trim", sequenceId: sequence.id, clipId: clip.id, edge, tick: bounded, ripple: false }]);
+    void onMutate([{ type: "clip.trim", sequenceId: sequence.id, clipId: clip.id, edge, tick: bounded, ripple }]);
   };
   const addTrack = async (type: Track["type"]) => {
     if (!project || !sequence) return;
@@ -424,22 +443,22 @@ function Timeline({ project, projectPath, artifactVersion, sequence, selectedCli
     const order = Math.max(-1, ...sequence.tracks.map((track) => track.order)) + 1;
     await onMutate([{ type: "track.add", sequenceId: sequence.id, track: { id, type, name: `${type[0]!.toUpperCase()}${type.slice(1)} ${same.length + 1}`, order, locked: false, muted: false, solo: false, hidden: false, gainDb: 0, pan: 0 } }]);
   };
-  return <section className="timeline-section"><div className="timeline-toolbar"><div><strong>Timeline</strong><button onClick={() => void addTrack("video")}>+ Video</button><button onClick={() => void addTrack("audio")}>+ Audio</button><button onClick={() => void addTrack("overlay")}>+ Overlay</button><button className={snapping ? "active" : ""} aria-pressed={snapping} onClick={() => setSnapping((value) => !value)}>⌁ Snap</button></div><label>Zoom<input type="range" min="24" max="220" value={zoom} onChange={(event) => onZoom(Number(event.target.value))} /></label></div>
-    <div className="timeline-scroll"><div className="track-labels"><div className="ruler-spacer" />{sequence?.tracks.map((track) => <div className="track-label" key={track.id}><span className={`track-dot ${track.type}`} /><span><strong>{track.name}</strong><small>{track.type}</small></span><button title="Mute" onClick={() => project && onMutate([{ type: "track.update", sequenceId: sequence.id, trackId: track.id, patch: { muted: !track.muted } }])} className={track.muted ? "active" : ""}>M</button></div>)}</div>
-      <div className="lanes" style={{ width }}><div className="ruler" onMouseDown={(event) => { const rect = event.currentTarget.getBoundingClientRect(); onPlayhead(secondsToTicks((event.clientX - rect.left) / zoom)); }}>{Array.from({ length: Math.ceil(durationSeconds / 5) + 1 }, (_, index) => <span key={index} style={{ left: index * 5 * zoom }}>{index * 5}s</span>)}</div>
-        {sequence?.tracks.map((track) => <div key={track.id} className={`lane ${track.type}`} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (!dragId) return; const rect = event.currentTarget.getBoundingClientRect(); void onMove(dragId, track, snapTick(secondsToTicks((event.clientX - rect.left) / zoom), dragId)); setDragId(undefined); }} onMouseDown={(event) => { if (event.target === event.currentTarget) { const rect = event.currentTarget.getBoundingClientRect(); onPlayhead(snapTick(secondsToTicks((event.clientX - rect.left) / zoom))); } }}>
-          {sequence.clips.filter((clip) => clip.trackId === track.id).map((clip) => {
+  return <section className="timeline-section"><div className="timeline-toolbar"><div><strong>Timeline</strong><button onClick={() => void addTrack("video")}>+ Video</button><button onClick={() => void addTrack("audio")}>+ Audio</button><button onClick={() => void addTrack("overlay")}>+ Overlay</button><button className={snapping ? "active" : ""} aria-pressed={snapping} onClick={() => setSnapping((value) => !value)}>⌁ Snap</button></div><label><input type="checkbox" checked={ripple} onChange={event=>setRipple(event.target.checked)}/>Ripple</label><label>Track height<input type="range" min="84" max="160" value={trackHeight} onChange={event=>setTrackHeight(Number(event.target.value))}/></label><label>Zoom<input type="range" min="24" max="220" value={zoom} onChange={(event) => onZoom(Number(event.target.value))} /></label></div>
+    <SelectionTools project={project} sequence={sequence} selectedIds={[...selected]} playhead={playhead} onSelect={onSelectClips} onMutate={onMutate} ripple={ripple}/><div className="timeline-scroll" ref={scrollRef} onScroll={event=>setViewport({left:event.currentTarget.scrollLeft,width:event.currentTarget.clientWidth})}><div className="track-labels"><div className="ruler-spacer" />{sequence?.tracks.map((track) => <div className="track-label" style={{height:trackHeight}} key={track.id}><span className={`track-dot ${track.type}`} /><span><strong>{track.name}</strong><small>{track.type}</small></span><span className="track-controls">{(["muted","solo","locked","hidden"] as const).map(key=><button key={key} aria-label={key+" "+track.name} aria-pressed={track[key]} onClick={()=>void onMutate([{type:"track.update",sequenceId:sequence.id,trackId:track.id,patch:{[key]:!track[key]}}])}>{key==="muted"?"M":key==="solo"?"S":key==="locked"?"L":"H"}</button>)}<button aria-label={"Move "+track.name+" up"} disabled={sequence.tracks.indexOf(track)===0} onClick={()=>{const previous=sequence.tracks[sequence.tracks.indexOf(track)-1];if(previous)void onMutate([{type:"track.update",sequenceId:sequence.id,trackId:track.id,patch:{order:previous.order}},{type:"track.update",sequenceId:sequence.id,trackId:previous.id,patch:{order:track.order}}]);}}>↑</button></span></div>)}</div>
+      <div className="lanes" style={{ width }}><div className="ruler" onMouseDown={(event) => { const rect = event.currentTarget.getBoundingClientRect(); onPlayhead(secondsToTicks((event.clientX - rect.left) / zoom)); }}>{Array.from({ length: Math.ceil((visibleEnd-visibleStart)/5)+2 }, (_, offset) => {const index=Math.floor(visibleStart/5)+offset;return <span key={index} style={{ left: index * 5 * zoom }}>{index * 5}s</span>;})}</div>
+        {sequence?.tracks.map((track) => <div key={track.id} className={`lane ${track.type}`} style={{height:trackHeight}} onDragOver={(event) => event.preventDefault()} onDrop={(event) => { event.preventDefault(); if (!dragId) return; const rect = event.currentTarget.getBoundingClientRect(); void moveSelection(dragId, track, snapTick(secondsToTicks((event.clientX - rect.left) / zoom), dragId)); setDragId(undefined); }} onMouseDown={(event) => { if (event.target === event.currentTarget) { const rect = event.currentTarget.getBoundingClientRect(); onPlayhead(snapTick(secondsToTicks((event.clientX - rect.left) / zoom))); } }}>
+          {sequence.clips.filter((clip) => clip.trackId === track.id && visible(clip.startTick,clip.durationTick)).map((clip) => {
             const mediaId = clip.source.type === "media" ? clip.source.mediaId : undefined;
             const media = mediaId ? project?.media.find((item) => item.id === mediaId) : undefined;
             const editing = trimEdit?.clipId === clip.id ? trimEdit : undefined;
             const displayStart = editing?.edge === "in" ? editing.currentTick : clip.startTick;
             const displayEnd = editing?.edge === "out" ? editing.currentTick : clip.startTick + clip.durationTick;
             const artifact = media ? mediaArtifactUrl(projectPath, media.id, media.kind === "audio" ? "waveform" : "thumbnail", artifactVersion) : "";
-            return <div role="group" tabIndex={0} aria-label={clip.name + (selectedClipId === clip.id ? ", selected" : "")} draggable key={clip.id} className={`timeline-clip ${selectedClipId === clip.id ? "selected" : ""}`} style={{ left: ticksToSeconds(displayStart) * zoom, width: Math.max(16, ticksToSeconds(displayEnd - displayStart) * zoom), "--clip-color": clipColor(clip, media) } as React.CSSProperties} onClick={(event) => { event.stopPropagation(); onSelect(clip.id); }} onKeyDown={(event) => { if(event.currentTarget !== event.target)return;if(event.key === "Enter" || event.key === " "){event.preventDefault();onSelect(clip.id);return;} if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); const next = Math.max(0, clip.startTick + (event.key === "ArrowLeft" ? -frameTick : frameTick) * (event.shiftKey ? 10 : 1)); void onMove(clip.id, track, next); }} onDragStart={() => setDragId(clip.id)} title={`${clip.name}\n${secondsLabel(clip.startTick)} — ${secondsLabel(clip.startTick + clip.durationTick)}`}><span className="trim-handle trim-in" role="slider" tabIndex={0} aria-label={`Trim start of ${clip.name}`} aria-valuenow={ticksToSeconds(clip.startTick)} onPointerDown={(event) => beginTrim(event, clip, "in")} onKeyDown={(event) => keyboardTrim(event, clip, "in")} /><span className="clip-art" style={artifact ? { backgroundImage: `url(${artifact})` } : undefined}>{clip.source.type === "animation" ? "◇" : media?.kind === "audio" ? "♫" : "▶"}</span><strong>{clip.name}</strong><small>{secondsLabel(displayEnd - displayStart)}</small><span className="trim-handle trim-out" role="slider" tabIndex={0} aria-label={`Trim end of ${clip.name}`} aria-valuenow={ticksToSeconds(clip.startTick + clip.durationTick)} onPointerDown={(event) => beginTrim(event, clip, "out")} onKeyDown={(event) => keyboardTrim(event, clip, "out")} /></div>;
+            return <div role="group" tabIndex={0} aria-label={clip.name + (selected.has(clip.id) ? ", selected" : "")} draggable key={clip.id} className={`timeline-clip ${selected.has(clip.id) ? "selected" : ""}`} style={{ left: ticksToSeconds(displayStart) * zoom, width: Math.max(16, ticksToSeconds(displayEnd - displayStart) * zoom), "--clip-color": clipColor(clip, media) } as React.CSSProperties} onClick={(event) => { event.stopPropagation(); select(clip.id,event.ctrlKey||event.metaKey||event.shiftKey); }} onKeyDown={(event) => { if(event.currentTarget !== event.target)return;if(event.key === "Enter" || event.key === " "){event.preventDefault();select(clip.id,event.ctrlKey||event.metaKey||event.shiftKey);return;} if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); const next = Math.max(0, clip.startTick + (event.key === "ArrowLeft" ? -frameTick : frameTick) * (event.shiftKey ? 10 : 1)); void moveSelection(clip.id, track, next); }} onDragStart={() => setDragId(clip.id)} title={`${clip.name}\n${secondsLabel(clip.startTick)} — ${secondsLabel(clip.startTick + clip.durationTick)}`}><span className="trim-handle trim-in" role="slider" tabIndex={0} aria-label={`Trim start of ${clip.name}`} aria-valuenow={ticksToSeconds(clip.startTick)} onPointerDown={(event) => beginTrim(event, clip, "in")} onKeyDown={(event) => keyboardTrim(event, clip, "in")} /><span className="clip-art" style={artifact ? { backgroundImage: `url(${artifact})` } : undefined}>{clip.source.type === "animation" ? "◇" : media?.kind === "audio" ? "♫" : "▶"}</span><strong>{clip.name}</strong><small>{secondsLabel(displayEnd - displayStart)}</small><span className="trim-handle trim-out" role="slider" tabIndex={0} aria-label={`Trim end of ${clip.name}`} aria-valuenow={ticksToSeconds(clip.startTick + clip.durationTick)} onPointerDown={(event) => beginTrim(event, clip, "out")} onKeyDown={(event) => keyboardTrim(event, clip, "out")} /></div>;
           })}
-          {sequence.captions.filter((caption) => caption.trackId === track.id).map((caption) => <div role="button" tabIndex={0} key={caption.id} aria-pressed={selectedCaptionId === caption.id} className={`caption-block ${selectedCaptionId === caption.id ? "selected" : ""}`} style={{ left: ticksToSeconds(caption.startTick) * zoom, width: Math.max(24, ticksToSeconds(caption.durationTick) * zoom) }} title={`${caption.text}\n${secondsLabel(caption.startTick)} — ${secondsLabel(caption.startTick + caption.durationTick)}`} onClick={(event) => { event.stopPropagation(); onSelectCaption(caption.id); }} onKeyDown={(event) => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); const startTick = Math.max(0, caption.startTick + (event.key === "ArrowLeft" ? -frameTick : frameTick) * (event.shiftKey ? 10 : 1)); void onMutate([{ type: "caption.update", sequenceId: sequence.id, captionId: caption.id, patch: { startTick } }]); }}><span>CC</span><strong>{caption.text}</strong></div>)}
+          {sequence.captions.filter((caption) => caption.trackId === track.id && visible(caption.startTick,caption.durationTick)).map((caption) => <div role="button" tabIndex={0} key={caption.id} aria-pressed={selectedCaptionId === caption.id} className={`caption-block ${selectedCaptionId === caption.id ? "selected" : ""}`} style={{ left: ticksToSeconds(caption.startTick) * zoom, width: Math.max(24, ticksToSeconds(caption.durationTick) * zoom) }} title={`${caption.text}\n${secondsLabel(caption.startTick)} — ${secondsLabel(caption.startTick + caption.durationTick)}`} onClick={(event) => { event.stopPropagation(); onSelectCaption(caption.id); }} onKeyDown={(event) => { if (event.key !== "ArrowLeft" && event.key !== "ArrowRight") return; event.preventDefault(); const startTick = Math.max(0, caption.startTick + (event.key === "ArrowLeft" ? -frameTick : frameTick) * (event.shiftKey ? 10 : 1)); void onMutate([{ type: "caption.update", sequenceId: sequence.id, captionId: caption.id, patch: { startTick } }]); }}><span>CC</span><strong>{caption.text}</strong></div>)}
         </div>)}
-        <div className="playhead" style={{ left: ticksToSeconds(playhead) * zoom }}><span /></div>
+        {sequence?.markers.filter(marker=>visible(marker.tick,marker.durationTick)).map(marker=><button className="timeline-marker" key={marker.id} style={{left:ticksToSeconds(marker.tick)*zoom}} aria-label={"Go to marker "+marker.label} title={marker.label} onClick={()=>onPlayhead(marker.tick)}>◆</button>)}<div className="playhead" style={{ left: ticksToSeconds(playhead) * zoom }}><span /></div>
       </div>
     </div>
   </section>;

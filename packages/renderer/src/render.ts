@@ -5,7 +5,7 @@ import path from "node:path";
 import { framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import { ProjectStore, sequenceDuration, sha256File, StudioException } from "@mcp-video-studio/core";
 import { renderAnimation } from "@mcp-video-studio/animation";
-import { filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
+import { requireFfmpegFilters, filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
 import { audioAutomationFilters } from "./automation.js";
 import { atempoChain, audioEffectFilters, clipTransformFilters, videoEffectFilters } from "./filters.js";
 
@@ -330,6 +330,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
   await mkdir(scratch, { recursive: true });
   try {
     options.onProgress?.(0.01, "Planning render");
+    if(sequence.captions.length)await requireFfmpegFilters(config.ffmpegPath,["drawtext"]);
     const inputs = await buildInputs(project, sequence, store, config, options.signal, options.onProgress);
     const captionFiles = new Map<string, string>();
     await Promise.all(sequence.captions.map(async (caption, index) => {

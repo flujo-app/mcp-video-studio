@@ -2,6 +2,7 @@ import { mkdtemp,rm } from "node:fs/promises";import path from "node:path";impor
 import { expect,it } from "vitest";import { chromium } from "patchright";import axe from "axe-core";
 import { Client } from "@modelcontextprotocol/client";
 import { StdioClientTransport } from "@modelcontextprotocol/client/stdio";
+import {defaultClip,secondsToTicks,type StudioProject,type ProjectCommand} from "@mcp-video-studio/contracts";
 import { browserEnvironment } from "../packages/animation/src/sandbox.js";
 const integration=process.env.RUN_BROWSER_INTEGRATION==="1"?it:it.skip;
 integration("actual stdio editor supports bootstrap, reload, keyboard edits, captions, templates and accessible workflows",async()=>{
@@ -29,9 +30,38 @@ integration("actual stdio editor supports bootstrap, reload, keyboard edits, cap
   await page.getByRole("button",{name:"Close editing workflows"}).click();
   await page.getByRole("button",{name:"Undo",exact:true}).click();await page.getByText("Undone",{exact:true}).waitFor();
   await page.getByRole("button",{name:"Redo",exact:true}).click();await page.getByText("Redone",{exact:true}).waitFor();
+  await page.getByRole("button",{name:"Select all",exact:true}).click();
+  await page.getByRole("button",{name:"Duplicate",exact:true}).click();await page.getByText("Saved revision 6",{exact:true}).waitFor();
+  await page.getByRole("button",{name:"Group",exact:true}).click();await page.getByText("Saved revision 7",{exact:true}).waitFor();
+  await page.getByRole("button",{name:"Ungroup",exact:true}).click();await page.getByText("Saved revision 8",{exact:true}).waitFor();
+  await page.getByRole("button",{name:"Editing workflows",exact:true}).click();
+  await page.keyboard.press("Shift+Tab");
+  expect(await page.evaluate(()=>Boolean(document.activeElement?.closest("[role=dialog]")))).toBe(true);
+  await page.keyboard.press("Escape");
+  await page.getByRole("dialog").waitFor({state:"hidden"});
+  expect(await page.getByRole("button",{name:"Editing workflows",exact:true}).evaluate(element=>element===document.activeElement)).toBe(true);
   await page.evaluate(axe.source,undefined,false);
   const result=await page.evaluate(async()=>await (window as unknown as {axe:typeof axe}).axe.run(document,{runOnly:{type:"tag",values:["wcag2a","wcag2aa","wcag21aa"]}}),undefined,false);
   expect(result.violations.map(v=>({id:v.id,nodes:v.nodes.map(n=>n.target)}))).toEqual([]);
+  const state=await page.evaluate(async()=>{
+   const headers={authorization:"Bearer "+sessionStorage.getItem("mcp-video-studio:access")};
+   const list=await fetch("/api/projects",{headers}).then(r=>r.json()) as {projects:Array<{path:string}>};
+   const projectPath=list.projects[0]!.path;
+   const result=await fetch("/api/project?projectPath="+encodeURIComponent(projectPath),{headers}).then(r=>r.json()) as {project:StudioProject};
+   return{projectPath,project:result.project};
+  });
+  const sequence=state.project.sequences[0]!,track=sequence.tracks[0]!,commands:ProjectCommand[]=[];
+  for(let index=0;index<900;index++){const clip=defaultClip(track.id,{type:"color",color:"#263b6a"},"Long clip "+index,secondsToTicks(2));clip.startTick=secondsToTicks(index*2);commands.push({type:"clip.add",sequenceId:sequence.id,clip,mode:"overwrite"});}
+  const saved=await page.evaluate(async args=>fetch("/api/commands",{method:"POST",headers:{"content-type":"application/json",authorization:"Bearer "+sessionStorage.getItem("mcp-video-studio:access")},body:JSON.stringify(args)}).then(async response=>({status:response.status,body:await response.json()})),{projectPath:state.projectPath,expectedRevision:state.project.revision,commands});
+  expect(saved.status).toBe(200);
+  await page.reload();await page.getByText("Project loaded",{exact:true}).waitFor();
+  expect(await page.locator(".timeline-clip").count()).toBeLessThan(50);
+  await page.locator(".timeline-scroll").evaluate(element=>{element.scrollLeft=element.scrollWidth-element.clientWidth;});
+  await page.getByRole("group",{name:"Long clip 899",exact:true}).waitFor();
+  expect(await page.locator(".timeline-clip").count()).toBeLessThan(50);
+  await page.getByRole("group",{name:"Long clip 899",exact:true}).press("Enter");
+  await page.getByRole("button",{name:"Group",exact:true}).click();
+  await page.getByText("Saved revision 10",{exact:true}).waitFor();
   await page.getByRole("button",{name:"Lock editor",exact:true}).click();await page.getByLabel("Editor access token").waitFor();
   expect(await page.evaluate(()=>sessionStorage.getItem("mcp-video-studio:access"))).toBeNull();
  }finally{await browser.close();await client.close();await rm(root,{recursive:true,force:true});}

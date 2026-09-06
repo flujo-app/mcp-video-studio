@@ -129,6 +129,7 @@ export function expandAdvancedCommand(project: StudioProject, command: AdvancedP
   const advance = (target: Clip, ticks: number) => Math.round(ticks * target.playbackRate.numerator / target.playbackRate.denominator);
   if (command.type === "clip.roll") {
     if (!after) fail("Roll requires an adjacent clip on the same track."); unlocked(sequence, after);
+    if(after.groupId||after.linkedGroupId)fail("Roll requires an ungrouped, unlinked adjacent clip.");
     const delta = integer(command.tick) - finish(clip);
     sourceHandles(project, clip, clip.sourceInTick, clip.durationTick + delta);
     sourceHandles(project, after, after.sourceInTick + advance(after, delta), after.durationTick - delta);
@@ -136,6 +137,7 @@ export function expandAdvancedCommand(project: StudioProject, command: AdvancedP
       { type: "clip.trim", sequenceId: sequence.id, clipId: after.id, edge: "in", tick: command.tick, ripple: false }];
   }
   if (!before || !after) fail("Slide requires adjacent clips on both sides."); unlocked(sequence, before); unlocked(sequence, after);
+  if(before.groupId||before.linkedGroupId||after.groupId||after.linkedGroupId)fail("Slide requires ungrouped, unlinked adjacent clips.");
   const delta = integer(command.deltaTick);
   sourceHandles(project, before, before.sourceInTick, before.durationTick + delta);
   sourceHandles(project, after, after.sourceInTick + advance(after, delta), after.durationTick - delta);

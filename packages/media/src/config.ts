@@ -124,7 +124,8 @@ export async function doctor(config: StudioConfig = loadConfig()): Promise<Recor
     catch (error) { font = { configured: true, path: config.defaultFontFile, error: error instanceof Error ? error.message : String(error) }; }
   }
   return {
-    ok: ffmpeg.available === true && ffprobe.available === true,
+    ok: ffmpeg.available === true && ffprobe.available === true && Boolean(filters?.stdout.includes("drawtext")) && Boolean(encoders?.stdout.includes("libx264")),
+    ...(!filters?.stdout.includes("drawtext")?{remediation:"Caption rendering requires a full FFmpeg build with drawtext. On macOS install ffmpeg-full and select its bin directory."}:{}),
     platform: process.platform,
     arch: process.arch,
     node: process.version,

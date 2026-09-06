@@ -214,3 +214,16 @@ MIT
 ## Unreleased 2026 remediation
 
 See [REMEDIATION.md](./REMEDIATION.md) for SDK 2 modern/legacy compatibility, required HTTP authentication, new editor workflows, archive format, tests and remaining pre-v1 acceptance work. No new npm release is implied by this branch.
+
+### macOS media dependencies
+
+Homebrew's minimal ffmpeg formula does not include the drawtext filter used by
+caption burn-in. Install the full formula, and put its bin directory first in PATH,
+or set VIDEO_STUDIO_FFMPEG_PATH and VIDEO_STUDIO_FFPROBE_PATH to those executables.
+Run brew install ffmpeg-full and use the bin directory returned by brew --prefix
+ffmpeg-full.
+
+The doctor reports a missing required filter before a caption job starts. See
+[Homebrew's full formula](https://formulae.brew.sh/formula/ffmpeg-full).
+The renderer detects current FFmpeg script-file support and retains compatibility
+with older distributions using the former filter_complex_script option.
