@@ -59,6 +59,7 @@ export async function importMedia(
       "Project revision changed before media operation.",
       "conflict",
     );
+  if(mediaKindFor(source,probe)==="lut"&&storageMode!=="managed")throw new StudioException("LUT_STORAGE","Import color LUTs as managed assets so archives remain portable.","input");
   const existing = current.media.find(
     (media) => media.storage.sha256 === sha256,
   );
@@ -169,6 +170,7 @@ export async function relinkMedia(
     probeMedia(source, config, signal),
   ]);
   const previous = current.media[index]!;
+  if(previous.kind==="lut"||mediaKindFor(source,probe)==="lut")throw new StudioException("LUT_RELINK","Import a replacement LUT as a managed asset, then select it in the effect stack.","input");
   const replacement: MediaAsset = {
     ...previous,
     name: path.basename(source),

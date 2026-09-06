@@ -14,6 +14,7 @@ export function sequenceDependencies(project:StudioProject,sequenceId:string,inc
   for(const clip of sequence.clips){
    if(++edges>100000)throw new StudioException("NESTED_SEQUENCE_LIMIT","Sequence dependency inspection exceeds 100,000 clips.","policy");
    if(!includeDisabled&&!clip.enabled)continue;
+   for(const effect of clip.effects)if(effect.type==="lut3d"&&(includeDisabled||effect.enabled)&&typeof effect.parameters.mediaId==="string")media.add(effect.parameters.mediaId);
    if(clip.source.type==="media")media.add(clip.source.mediaId);
    if(clip.source.type==="animation")animations.add(clip.source.animationId);
    if(clip.source.type==="sequence")depth=Math.max(depth,1+visit(clip.source.sequenceId,[...ancestors,id]));

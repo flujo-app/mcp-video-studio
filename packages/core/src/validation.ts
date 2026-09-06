@@ -29,6 +29,7 @@ export function validateProject(project: StudioProject): StudioProject {
   const frameTick = ticksPerFrame(project.settings.fps);
 
   const normalized = parsed.data as StudioProject;
+  for(const media of normalized.media)if(media.kind==="lut"&&media.storage.mode!=="managed")throw new StudioException("LUT_STORAGE","Color LUTs must be managed project assets.","input");
   for (const sequence of normalized.sequences) {
     sequenceDependencies(normalized,sequence.id,true);
     prepareTransitionTimeline(normalized,sequence);
@@ -36,6 +37,7 @@ export function validateProject(project: StudioProject): StudioProject {
     const clips = new Map(sequence.clips.map((clip) => [clip.id, clip]));
     for (const clip of sequence.clips) {
       for(const effect of clip.effects.filter(effect=>effect.type==="mask"))if(!MaskParametersSchema.safeParse(effect.parameters).success)throw new StudioException("INVALID_MASK","Mask requires bounded rectangle/ellipse geometry and scalar controls.","input");
+      for(const effect of clip.effects.filter(effect=>effect.type==="lut3d")){const values=effect.parameters;if(Object.keys(values).some(key=>!["mediaId","interpolation"].includes(key))||typeof values.mediaId!=="string"||!normalized.media.some(media=>media.id===values.mediaId&&media.kind==="lut"&&media.storage.mode==="managed")||![undefined,"tetrahedral","trilinear"].includes(values.interpolation as string|undefined))throw new StudioException("INVALID_LUT_EFFECT","A LUT effect requires an imported managed LUT and tetrahedral or trilinear interpolation.","input");}
       const track = sequence.tracks.find((item) => item.id === clip.trackId);
       if (!track) continue;
       if ((track.type === "video" || track.type === "overlay" || track.type === "caption") && (clip.startTick % frameTick !== 0 || clip.durationTick % frameTick !== 0)) {
@@ -46,7 +48,7 @@ export function validateProject(project: StudioProject): StudioProject {
       let sourceDuration:number|undefined;
       if(clip.source.type==="media"){
         const source=normalized.media.find(item=>clip.source.type==="media"&&item.id===clip.source.mediaId);
-        if(source&&["font","subtitle"].includes(source.kind))throw new StudioException("NON_TIMELINE_MEDIA","Font/subtitle assets belong in caption styles or caption import, not AV clips.","input");
+        if(source&&["font","subtitle","lut"].includes(source.kind))throw new StudioException("NON_TIMELINE_MEDIA","Fonts, subtitles and LUTs belong in caption or effect controls, not AV clips.","input");
         if(source&&source.kind!=="image")sourceDuration=source.probe.durationTick;
       }else if(clip.source.type==="animation")sourceDuration=normalized.animations.find(item=>clip.source.type==="animation"&&item.id===clip.source.animationId)?.durationTick;
       if(clip.source.type==="sequence"){const source=normalized.sequences.find(item=>clip.source.type==="sequence"&&item.id===clip.source.sequenceId);if(source)sourceDuration=framesToTicks(ticksToFrames(sequenceDuration(source),normalized.settings.fps,"ceil"),normalized.settings.fps);}

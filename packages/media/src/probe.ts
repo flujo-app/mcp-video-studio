@@ -1,3 +1,4 @@
+import {probeLut} from "./luts.js";
 import {probeFont} from "./fonts.js";
 import path from "node:path";
 import { rational, secondsToTicks, type MediaKind, type MediaProbe, type Rational } from "@mcp-video-studio/contracts";
@@ -38,6 +39,7 @@ function firstFinite(...values: Array<string | undefined>): number {
 }
 
 export async function probeMedia(filePath: string, config: StudioConfig, signal?: AbortSignal): Promise<MediaProbe> {
+  if(path.extname(filePath).toLowerCase()===".cube")return probeLut(filePath,signal);
   if([".ttf",".otf",".woff",".woff2",".ttc"].includes(path.extname(filePath).toLowerCase()))return probeFont(filePath);
   const result = await runChecked(config.ffprobePath, ["-protocol_whitelist", "file,pipe,data", "-v", "error", "-print_format", "json", "-show_format", "-show_streams", path.resolve(filePath)], { signal, timeoutMs: 60_000 });
   let data: FfprobeJson;
@@ -61,6 +63,7 @@ export async function probeMedia(filePath: string, config: StudioConfig, signal?
 
 export function mediaKindFor(filePath: string, probe: MediaProbe): MediaKind {
   const extension = path.extname(filePath).toLowerCase();
+  if(extension===".cube")return "lut";
   if ([".ttf", ".otf", ".woff", ".woff2"].includes(extension)) return "font";
   if ([".srt", ".vtt", ".ass", ".ssa"].includes(extension)) return "subtitle";
   if ([".png", ".jpg", ".jpeg", ".webp", ".gif", ".bmp", ".avif", ".svg"].includes(extension) && !probe.hasAudio) return "image";

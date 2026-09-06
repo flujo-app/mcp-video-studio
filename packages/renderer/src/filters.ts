@@ -1,6 +1,7 @@
 import {preserveEffectAlpha} from "./alpha.js";
 import {maskFilters} from "./masks.js";
 export const VIDEO_EFFECTS_VERSION=3;
+import {escapeFilterValue} from "@mcp-video-studio/media";
 import type { Clip, EffectInstance } from "@mcp-video-studio/contracts";
 import { StudioException } from "@mcp-video-studio/core";
 function bounded(value:unknown,fallback:number,min:number,max:number):number{
@@ -20,13 +21,14 @@ export function atempoChain(rate:number):string[]{
  while(value>2){filters.push("atempo=2");value/=2;}while(value<.5){filters.push("atempo=0.5");value/=.5;}
  if(Math.abs(value-.5)<1e-9)filters.push("atempo=0.5");else if(Math.abs(value-2)<1e-9)filters.push("atempo=2");else if(Math.abs(value-1)>1e-9)filters.push("atempo="+value.toFixed(8));return filters;
 }
-export function videoEffectFilters(effects:EffectInstance[],maskPrefix="mask"):string[]{
+export function videoEffectFilters(effects:EffectInstance[],lutFiles:Map<string,string>=new Map(),maskPrefix="mask"):string[]{
  const result:string[]=[];
  for(const [index,effect] of effectsOf(effects).entries()){
   const first=result.length;
   const p=effect.parameters;
   switch(effect.type){
    case "mask":break; // Clip visibility is evaluated after color processing.
+   case "lut3d":{const file=typeof p.mediaId==="string"?lutFiles.get(p.mediaId):undefined;if(!file||![undefined,"tetrahedral","trilinear"].includes(p.interpolation as string|undefined))throw new StudioException("INVALID_LUT_EFFECT","Select an imported managed LUT and supported interpolation.","input");result.push("lut3d=file='"+escapeFilterValue(file)+"':interp="+(p.interpolation??"tetrahedral"));break;}
    case "color":result.push("eq=brightness="+bounded(p.brightness,0,-1,1)+":contrast="+bounded(p.contrast,1,0,10)+":saturation="+bounded(p.saturation,1,0,3));break;
    case "brightness":result.push("eq=brightness="+bounded(p.value,0,-1,1));break;
    case "blur":result.push("gblur=sigma="+bounded(p.radius,4,0,100));break;

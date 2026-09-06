@@ -2,7 +2,7 @@ import type { Rational } from "./time.js";
 
 export type UUID = string;
 export type TrackType = "video" | "audio" | "overlay" | "caption";
-export type MediaKind = "video" | "audio" | "image" | "font" | "subtitle" | "animation";
+export type MediaKind = "video" | "audio" | "image" | "font" | "lut" | "subtitle" | "animation";
 export type InsertMode = "overwrite" | "insert" | "ripple" | "replace";
 export type BlendMode = "normal" | "multiply" | "screen" | "overlay" | "darken" | "lighten" | "difference";
 export type Curve = "hold" | "linear" | "easeIn" | "easeOut" | "easeInOut" | "easeOutExpo" | "overshoot";

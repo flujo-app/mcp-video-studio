@@ -185,7 +185,7 @@ export const StudioProjectSchema = z.object({
   media: z.array(z.object({
     id,
     name: z.string().min(1),
-    kind: z.enum(["video", "audio", "image", "font", "subtitle", "animation"]),
+    kind: z.enum(["video", "audio", "image", "font", "lut", "subtitle", "animation"]),
     mimeType: z.string().optional(),
     storage: z.discriminatedUnion("mode", [
       z.object({ mode: z.literal("managed"), sha256: z.string().regex(/^[a-f0-9]{64}$/), relativePath: z.string().min(1).max(4096).refine(value => !value.includes("\\") && !value.includes(":") && !value.startsWith("/") && value.split("/").every(segment => segment !== ".." && segment !== "." && segment !== ""), "Managed media paths must be portable relative paths."), bytes: safeInteger.nonnegative() }),

@@ -6,10 +6,11 @@ integration("color effects retain exact incoming alpha, blur/flip geometry, and 
  try{
   const source=Buffer.alloc(width*height*4);for(let y=0;y<height;y++)for(let x=0;x<width;x++){const i=(y*width+x)*4;source.set(x<80?[20,220,40,Math.round(x*255/159)]:[50,90,210,Math.round(x*255/159)],i);}
   const file=path.join(root,"source.rgba");await writeFile(file,source);
+  const lut=path.join(root,"identity.cube");await writeFile(lut,"LUT_3D_SIZE 2\n0 0 0\n1 0 0\n0 1 0\n1 1 0\n0 0 1\n1 0 1\n0 1 1\n1 1 1\n");
   let ordinal=0;const render=async(filters:string[],input=source)=>{const inputFile=path.join(root,"in-"+ordinal+".rgba"),output=path.join(root,"out-"+ordinal+++".rgba");await writeFile(inputFile,input);await runChecked(config.ffmpegPath,["-v","error","-y","-f","rawvideo","-pixel_format","rgba","-video_size",width+"x"+height,"-i",inputFile,"-vf",filters.join(","),"-frames:v","1","-pix_fmt","rgba","-f","rawvideo",output],{timeoutMs:15000});return readFile(output);};
   const effect=(type:string,parameters:Record<string,unknown>):EffectInstance=>({id:type,type,parameters,version:1,enabled:true});
-  for(const e of [effect("color",{brightness:.1,contrast:1.2,saturation:.7}),effect("brightness",{value:.1}),effect("sharpen",{amount:1}),effect("vignette",{angle:.5}),effect("grayscale",{})]){
-   const output=await render(videoEffectFilters([e]));
+  for(const e of [effect("color",{brightness:.1,contrast:1.2,saturation:.7}),effect("brightness",{value:.1}),effect("sharpen",{amount:1}),effect("vignette",{angle:.5}),effect("grayscale",{}),effect("lut3d",{mediaId:"identity"})]){
+   const output=await render(videoEffectFilters([e],new Map([["identity",lut]])));
    for(let i=3;i<source.length;i+=4)expect(output[i],e.type+" alpha at "+i).toBe(source[i]);
   }
   for(const type of ["hflip","vflip"]){const output=await render(videoEffectFilters([effect(type,{})]));for(let y=0;y<height;y++)for(let x=0;x<width;x++){const from=((type==="vflip"?height-1-y:y)*width+(type==="hflip"?width-1-x:x))*4;expect(output.subarray((y*width+x)*4,(y*width+x)*4+4)).toEqual(source.subarray(from,from+4));}}

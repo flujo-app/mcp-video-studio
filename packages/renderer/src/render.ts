@@ -9,7 +9,7 @@ import path from "node:path";
 import { TICKS_PER_SECOND, availableExportPresets, framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import { sequenceDependencies, prepareTransitionTimeline, transitionStyle, ProjectStore, validateProject, sequenceDuration, sha256File, readJson, writeJson, confinedPath, StudioException } from "@mcp-video-studio/core";
 import { renderAnimation,ANIMATION_RENDERER_VERSION } from "@mcp-video-studio/animation";
-import { runChecked, requireFfmpegFilters, filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
+import { readCubeLut, runChecked, requireFfmpegFilters, filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
 import { audioParameterVariants, maskedVariantGraph } from "./audio-ranges.js";
 import { audioAutomationFilters } from "./automation.js";
 import { atempoChain, audioEffectFilters, clipTransformFilters, videoEffectFilters } from "./filters.js";
@@ -223,7 +223,7 @@ function fadeFilters(sequence:Sequence,clip:Clip):string[]{
 }
 
 
-function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: InputSpec[], captionFiles: Map<string, string>, maxWidth?: number, defaultFontFile?: string, pass: {video?:boolean;audio?:boolean;range?:{startTick:number;endTick:number};cachedVideoInput?:number;cachedAudioInput?:number;captionFonts?:Map<string,string>} = {}): { graph: string; videoLabel: string; audioLabel: string; durationTick: number; frameCount: number } {
+function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: InputSpec[], captionFiles: Map<string, string>, maxWidth?: number, defaultFontFile?: string, pass: {video?:boolean;audio?:boolean;range?:{startTick:number;endTick:number};cachedVideoInput?:number;cachedAudioInput?:number;captionFonts?:Map<string,string>;lutFiles?:Map<string,string>} = {}): { graph: string; videoLabel: string; audioLabel: string; durationTick: number; frameCount: number } {
   const durationTick = pass.range?pass.range.endTick-pass.range.startTick:sequenceDuration(sequence);
   if (durationTick <= 0) throw new StudioException("EMPTY_SEQUENCE", "The sequence has no renderable duration.", "input");
   const frameCount = ticksToFrames(durationTick, project.settings.fps, "ceil");
@@ -259,7 +259,7 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
       `fps=${fps}`,
       "trim=start_pts="+ticksToFrames(startTick,project.settings.fps)+":end_pts="+ticksToFrames(finishTick,project.settings.fps),
       ...transform.filters,
-      ...videoEffectFilters(clip.effects,"vmask"+visualIndex),
+      ...videoEffectFilters(clip.effects,pass.lutFiles,"vmask"+visualIndex),
       ...fadeFilters(sequence, clip)
     ];
     const clipLabel = `vclip${visualIndex}`;
@@ -421,7 +421,7 @@ function nestedFingerprint(project:StudioProject,clips:Clip[],mediaHashes:Map<st
  return{captionFonts:project.sequences.filter(sequence=>sequences.has(sequence.id)).flatMap(sequence=>sequence.captions.map(caption=>({id:caption.id,hash:mediaHashes.get("caption-font:"+caption.id)}))),sequences:project.sequences.filter(sequence=>sequences.has(sequence.id)),media:[...media].map(id=>({id,sha256:mediaHashes.get(id)})),animations:project.animations.filter(animation=>animations.has(animation.id))};
 }
 interface CachedRange{startTick:number;endTick:number;renderKey:string;cacheHit:boolean}
-async function videoRanges(project:StudioProject,sequence:Sequence,store:ProjectStore,config:StudioConfig,options:RenderOptions,scratch:string,captionFiles:Map<string,string>,mediaHashes:Map<string,string>,captionFonts:Map<string,string>){
+async function videoRanges(project:StudioProject,sequence:Sequence,store:ProjectStore,config:StudioConfig,options:RenderOptions,scratch:string,captionFiles:Map<string,string>,mediaHashes:Map<string,string>,captionFonts:Map<string,string>,lutFiles:Map<string,string>){
  const totalFrames=ticksToFrames(sequenceDuration(sequence),project.settings.fps,"ceil");
  const rangeFrames=Math.max(options.videoRangeFrames??Math.max(1,Math.round(10*project.settings.fps.numerator/project.settings.fps.denominator)),Math.ceil(totalFrames/3600));
  const ranges:CachedRange[]=[],list:string[]=[];
@@ -431,6 +431,7 @@ async function videoRanges(project:StudioProject,sequence:Sequence,store:Project
   const startTick=framesToTicks(startFrame,project.settings.fps),endTick=framesToTicks(Math.min(totalFrames,startFrame+rangeFrames),project.settings.fps);
   const owned=clips.filter(clip=>clip.startTick<endTick&&clip.startTick+clip.durationTick>startTick);
   const ids=new Set(owned.map(clip=>clip.id)),mediaIds=new Set(owned.flatMap(clip=>clip.source.type==="media"?[clip.source.mediaId]:[]));
+  for(const clip of owned)for(const effect of clip.effects)if(effect.enabled&&effect.type==="lut3d"&&typeof effect.parameters.mediaId==="string")mediaIds.add(effect.parameters.mediaId);
   const animationIds=new Set(owned.flatMap(clip=>clip.source.type==="animation"?[clip.source.animationId]:[]));
   const captions=sequence.captions.filter(caption=>caption.startTick<endTick&&caption.startTick+caption.durationTick>startTick);
   const rangeSequence={...sequence,clips:owned,captions};
@@ -449,7 +450,7 @@ async function videoRanges(project:StudioProject,sequence:Sequence,store:Project
   try{const [meta,hash]=await Promise.all([readJson<{sha256:string;bytes:number}>(confinedPath(store.root,cached+".json")),sha256File(cached)]);hit=hash.bytes>0&&hash.sha256===meta.sha256&&hash.bytes===meta.bytes;}catch{}
   if(!hit){
    const inputs=await buildInputs(project,rangeSequence,store,config,options.signal,options.onProgress,{audio:false,scratch});
-   const compiled=buildFilterGraph(project,rangeSequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{audio:false,range:{startTick,endTick},captionFonts});
+   const compiled=buildFilterGraph(project,rangeSequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{audio:false,range:{startTick,endTick},captionFonts,lutFiles});
    const graphPath=path.join(scratch,"range-"+ranges.length+".txt");await writeFile(graphPath,compiled.graph,"utf8");
    await ffmpegArtifact(config,[...inputs.flatMap(input=>input.args),await filterScriptOption(config.ffmpegPath),graphPath,"-map","["+compiled.videoLabel+"]","-frames:v",String(compiled.frameCount),"-c:v","ffv1","-level","3","-an"],cached,{signal:options.signal,timeoutMs:60*60_000});
    await writeJson(cached+".json",await sha256File(cached));
@@ -493,6 +494,8 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
    if(samePath(source,options.outputPath))throw new StudioException("SOURCE_OUTPUT_OVERWRITE","Export cannot overwrite a project media source.","input");
    mediaHashes.set(media.id,(await sha256File(source,options.signal)).sha256);
   }
+  const lutContents=new Map<string,Buffer>();let lutBytes=0;
+  if(!audioOnly)for(const media of project.media.filter(media=>media.kind==="lut"&&mediaIds.has(media.id))){if(lutContents.size>=32||lutBytes+media.storage.bytes>64*1024*1024)throw new StudioException("LUT_RENDER_LIMIT","Use at most32 distinct LUTs totalling64 MiB per render.","policy");const lut=await readCubeLut(mediaPath(store,media),options.signal);if(lut.sha256!==mediaHashes.get(media.id))throw new StudioException("SOURCE_CHANGED_DURING_RENDER","A LUT changed during validation; retry with stable assets.","conflict");lutBytes+=lut.canonical.length;if(lutBytes>64*1024*1024)throw new StudioException("LUT_RENDER_LIMIT","Normalized LUT data exceeds64 MiB.","policy");lutContents.set(media.id,lut.canonical);}
   const captionFonts=new Map<string,string>();
   if(preset.container!=="wav")for(const owner of project.sequences.filter(owner=>dependencies.sequences.has(owner.id)))for(const caption of owner.captions){
    const font=caption.style.fontMediaId?mediaPath(store,mediaById(project,caption.style.fontMediaId)):captionFontFile(caption.style.fontFamily,config.defaultFontFile);
@@ -545,11 +548,12 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
       captionFiles.set(caption.id, textPath);
     }));
     const useRanges=!audioOnly&&options.videoRangeFrames!==0&&(options.videoRangeFrames!==undefined||ticksToSeconds(durationTick)>30||sequence.clips.filter(clip=>visualClip(project,sequence,clip)).length>32);
-    const cachedVideo=useRanges?await videoRanges(project,sequence,store,config,options,scratch,captionFiles,mediaHashes,captionFonts):undefined;
+    const lutFiles=new Map<string,string>();for(const [id,content]of lutContents){const file=path.join(scratch,"lut-"+lutFiles.size+".cube");await writeFile(file,content);lutFiles.set(id,file);}
+    const cachedVideo=useRanges?await videoRanges(project,sequence,store,config,options,scratch,captionFiles,mediaHashes,captionFonts,lutFiles):undefined;
     const cachedAudio=cachedVideo&&hasAudio?await continuousAudio(project,sequence,store,config,options,scratch,mediaHashes):undefined;
     const inputSequence=cachedVideo?{...sequence,clips:[]}:audioOnly?{...sequence,clips:sequence.clips.filter(clip=>audibleClip(project,clip))}:sequence;
     const inputs=await buildInputs(project,inputSequence,store,config,options.signal,options.onProgress,{video:!audioOnly,audio:hasAudio,scratch});
-    const compiled = buildFilterGraph(project,sequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{captionFonts,video:!audioOnly&&!cachedVideo,audio:hasAudio&&!cachedAudio,...(cachedVideo?{cachedVideoInput:inputs.length}:{}),...(cachedAudio?{cachedAudioInput:inputs.length+1}:{})});
+    const compiled = buildFilterGraph(project,sequence,inputs,captionFiles,options.maxWidth,config.defaultFontFile,{captionFonts,lutFiles,video:!audioOnly&&!cachedVideo,audio:hasAudio&&!cachedAudio,...(cachedVideo?{cachedVideoInput:inputs.length}:{}),...(cachedAudio?{cachedAudioInput:inputs.length+1}:{})});
     const graphPath = path.join(scratch, "filter-complex.txt");
     const trims=exportRangeFilters(range),fps=project.settings.fps.numerator+"/"+project.settings.fps.denominator;
     let graph=compiled.graph;
