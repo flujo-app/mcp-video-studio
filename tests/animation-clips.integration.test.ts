@@ -17,6 +17,8 @@ integration("animation clips retain exact trim, split, speed, effect and transit
   await store.mutate(3,[{type:"clip.trim",sequenceId:sequence.id,clipId:second.id,edge:"out",tick:secondsToTicks(1.8),ripple:false}]);const trimmed=await render("trimmed");expect(trimmed.length).toBe(18*160*90*4);expect(trimmed.equals(before.subarray(0,trimmed.length))).toBe(true);
   const source=path.join(root,"source.mkv");await renderAnimation(document,config,{fps,outputPath:source});const imported=await importMedia(store,source,"managed",4,config);
   await store.replace(5,p=>{for(const clip of p.sequences[0]!.clips)if(clip.source.type==="animation")clip.source={type:"media",mediaId:imported.asset.media.id};},{sequences:[sequence.id],tracks:[track.id],clips:[first.id,second.id,"split-right"],media:[imported.asset.media.id],animations:[],generatedArtifacts:[]});
-  expect((await render("equivalent-media",5)).equals(trimmed)).toBe(true);
+  const equivalent=await render("equivalent-media",5);
+  if(!equivalent.equals(trimmed)){const frames=Array.from({length:18},(_,frame)=>{let differing=0,maxDelta=0;for(let offset=frame*160*90*4;offset<(frame+1)*160*90*4;offset++){const delta=Math.abs((equivalent[offset]??0)-(trimmed[offset]??0));if(delta)differing++;maxDelta=Math.max(maxDelta,delta);}return{frame,differing,maxDelta};});console.log("ANIMATION_MEDIA_PARITY",JSON.stringify({frames,equivalentBytes:equivalent.length,trimmedBytes:trimmed.length,probe:imported.asset.media.probe}));}
+  expect(equivalent.equals(trimmed)).toBe(true);
  }finally{await rm(root,{recursive:true,force:true});}
 },120000);
