@@ -6,7 +6,7 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { copyFile, link, mkdir, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { availableExportPresets, framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
+import { TICKS_PER_SECOND, availableExportPresets, framesToTicks, ticksPerSample, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import { sequenceDependencies, prepareTransitionTimeline, transitionStyle, ProjectStore, validateProject, sequenceDuration, sha256File, readJson, writeJson, confinedPath, StudioException } from "@mcp-video-studio/core";
 import { renderAnimation,ANIMATION_RENDERER_VERSION } from "@mcp-video-studio/animation";
 import { runChecked, requireFfmpegFilters, filterScriptOption, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
@@ -511,7 +511,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     preset,
     media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: mediaHashes.get(asset.id), offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
-    encodingVersion:1,exportRange:range,encoder,
+    encodingVersion:2,exportRange:range,encoder,
     output: { videoRangeFrames:options.videoRangeFrames??null, maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
     renderer: 16,videoEffectsVersion:VIDEO_EFFECTS_VERSION,animationRenderer:ANIMATION_RENDERER_VERSION
   });
@@ -563,6 +563,8 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
       ...(!audioOnly?["-map",gif?"[exportgif]":"[exportvideo]","-r",fps,"-fps_mode","cfr",...encoderArguments(encoder!.selected,{...(options.crf!==undefined||preset.crf!==undefined?{crf:options.crf??preset.crf!}:{}),...(options.encoderPreset?{preset:options.encoderPreset}:{}),...(preset.videoBitrate?{videoBitrate:preset.videoBitrate}:{})})]:[]),
       ...(hasAudio?["-map","[exportaudio]","-c:a",preset.audioCodec??"aac",...(preset.audioBitrate?["-b:a",preset.audioBitrate]:[])]:["-an"]),
       "-t",String(range.durationSeconds),
+      // Use exact Studio ticks for fractional frames and audio sample boundaries in the movie clock.
+      ...(preset.container==="mp4"?["-movie_timescale",String(TICKS_PER_SECOND)]:[]),
       ...(preset.faststart?["-movflags","+faststart"]:[]),
       ...(gif?["-loop","0"]:[]),"-progress","pipe:2"
     ];
