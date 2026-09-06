@@ -563,26 +563,49 @@ integration(
             .getAttribute("data-tile-span"),
         )
         .not.toBe(initialSpan);
-      // Select the actual mounted new-scale thumbnail. A pending response from
-      // an old scale/clip must not stand in for this resource's successful decode.
-      const decodedTile = await page.evaluate(async previousSpan => {
-        const image = [...document.querySelectorAll<HTMLImageElement>(".timeline-tiles img")]
-          .find(candidate => candidate.dataset.tileSpan !== previousSpan &&
-            new URL(candidate.src).searchParams.get("kind") === "timeline-thumbnail");
-        if (!image) throw new Error("No new-scale thumbnail was mounted.");
+      // A newly inserted lazy image can reject decode() while currentSrc is
+      // still empty. First wait for its selected resource to finish loading.
+      // Zoom also scrolls to the playhead and changes the virtual tile set.
+      const readyTile = await page.waitForFunction(previousSpan => {
+        const viewport = document.querySelector(".timeline-scroll");
+        const playhead = document.querySelector(".timeline-scroll .playhead");
+        if (!viewport || !playhead) return;
+        const bounds = viewport.getBoundingClientRect(), anchor = playhead.getBoundingClientRect();
+        if (anchor.left < bounds.left || anchor.left >= bounds.right) return;
+        return [...document.querySelectorAll<HTMLImageElement>(".timeline-tiles img")]
+          .find(image => {
+            const rect = image.getBoundingClientRect();
+            return image.dataset.tileSpan !== previousSpan &&
+              new URL(image.src).searchParams.get("kind") === "timeline-thumbnail" &&
+              rect.right > bounds.left && rect.left < bounds.right &&
+              rect.bottom > bounds.top && rect.top < bounds.bottom &&
+              image.currentSrc === image.src && image.complete;
+          });
+      }, initialSpan, { timeout: 30000 });
+      const decodedTile = await readyTile.evaluate(async image => {
+        if (!image) throw new Error("No loaded new-scale thumbnail was mounted.");
         const source = image.src;
-        let timer: ReturnType<typeof setTimeout> | undefined;
+        let timer: ReturnType<typeof setTimeout> | undefined, decodeError: string | null = null;
         try {
           await Promise.race([image.decode(), new Promise<never>((_, reject) => {
             timer = setTimeout(() => reject(new Error(
               "New-scale thumbnail exceeded the tile service's 30-second deadline.")), 30000);
           })]);
+        } catch (error) {
+          decodeError = error instanceof Error ? error.name : "UnknownDecoderError";
         } finally { clearTimeout(timer); }
-        if (!image.isConnected || image.src !== source)
-          throw new Error("New-scale thumbnail changed before decode completed.");
         return { source, width: image.naturalWidth, height: image.naturalHeight,
-          span: image.dataset.tileSpan, complete: image.complete };
-      }, initialSpan);
+          span: image.dataset.tileSpan, complete: image.complete,
+          connected: image.isConnected, currentSourceMatches: image.currentSrc === source && image.src === source,
+          decodeError };
+      });
+      await readyTile.dispose();
+      const { source: decodedSource, ...decodeState } = decodedTile;
+      expect(decodedTile.decodeError, JSON.stringify({
+        ...decodeState, response: tileResponses.get(decodedSource)
+      })).toBeNull();
+      expect(decodedTile.connected).toBe(true);
+      expect(decodedTile.currentSourceMatches).toBe(true);
       expect(tileResponses.get(decodedTile.source)).toEqual({
         status: 200, type: expect.stringContaining("image/png")
       });
