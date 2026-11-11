@@ -2,10 +2,11 @@ import { createHash, randomUUID } from "node:crypto";
 import { existsSync } from "node:fs";
 import { copyFile, mkdir, readdir, rename, rm, stat, utimes, writeFile } from "node:fs/promises";
 import path from "node:path";
-import { framesToTicks, ticksPerFrame, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
+import { exportPresetsFor, framesToTicks, ticksToFrames, ticksToSeconds, type Clip, type ExportPreset, type MediaAsset, type Sequence, type StudioProject } from "@mcp-video-studio/contracts";
 import { ProjectStore, sequenceDuration, sha256File, StudioException } from "@mcp-video-studio/core";
 import { renderAnimation } from "@mcp-video-studio/animation";
-import { ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
+import { alphaDecoderArgs, ffmpegArtifact, mediaPath, probeMedia, type StudioConfig } from "@mcp-video-studio/media";
+import { backdropKeyGraph, backdropKeyOptionsFromEffect, detectBackdropColor, parseColor, resolveBackdropKey, type ResolvedBackdropKey } from "./alpha.js";
 import { atempoChain, audioEffectFilters, clipTransformFilters, videoEffectFilters } from "./filters.js";
 
 export interface RenderOptions {
@@ -104,7 +105,7 @@ export async function pruneRenderCache(projectRoot: string, maxBytes: number, pr
 }
 
 function presetById(project: StudioProject, id: string): ExportPreset {
-  const preset = project.exportPresets.find((candidate) => candidate.id === id);
+  const preset = exportPresetsFor(project).find((candidate) => candidate.id === id);
   if (!preset) throw new StudioException("PRESET_NOT_FOUND", `Export preset not found: ${id}`, "input");
   return preset;
 }
@@ -161,7 +162,7 @@ async function buildInputs(project: StudioProject, sequence: Sequence, store: Pr
     if (clip.source.type === "media") {
       const media = mediaById(project, clip.source.mediaId);
       const source = mediaPath(store, media);
-      inputs.push({ args: media.kind === "image" ? ["-loop", "1", "-i", source] : ["-i", source], clip, media, inputIndex: index++, path: source });
+      inputs.push({ args: [...(media.kind === "image" ? ["-loop", "1"] : []), ...alphaDecoderArgs(media.probe), "-i", source], clip, media, inputIndex: index++, path: source });
     } else if (clip.source.type === "color") {
       inputs.push({ args: ["-f", "lavfi", "-i", `color=c=${ffmpegColor(clip.source.color)}:s=${project.settings.raster.width}x${project.settings.raster.height}:r=${project.settings.fps.numerator}/${project.settings.fps.denominator}`], clip, inputIndex: index++ });
     } else if (clip.source.type === "animation") {
@@ -182,6 +183,21 @@ async function buildInputs(project: StudioProject, sequence: Sequence, store: Pr
   return inputs;
 }
 
+/** Resolves every enabled `backdropKey` effect to a concrete colour; `auto` reads the clip's first frame corners. */
+async function resolveBackdropKeys(inputs: InputSpec[], config: StudioConfig, signal?: AbortSignal): Promise<Map<string, ResolvedBackdropKey>> {
+  const keys = new Map<string, ResolvedBackdropKey>();
+  for (const input of inputs) {
+    for (const effect of input.clip.effects.filter((item) => item.enabled && item.type === "backdropKey")) {
+      const options = backdropKeyOptionsFromEffect(effect);
+      if (options.color.toLowerCase() !== "auto") { keys.set(effect.id, resolveBackdropKey(parseColor(options.color), options)); continue; }
+      if (!input.path) continue;
+      const detected = await detectBackdropColor(input.path, config, { atTick: input.clip.sourceInTick, ...(input.media ? { probe: input.media.probe } : {}), signal });
+      keys.set(effect.id, resolveBackdropKey(detected.rgb, options));
+    }
+  }
+  return keys;
+}
+
 function fadeFilters(sequence: Sequence, clip: Clip): string[] {
   const filters: string[] = [];
   const incoming = sequence.transitions.find((transition) => transition.toClipId === clip.id);
@@ -191,14 +207,25 @@ function fadeFilters(sequence: Sequence, clip: Clip): string[] {
   return filters;
 }
 
-function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: InputSpec[], captionFiles: Map<string, string>, maxWidth?: number, defaultFontFile?: string): { graph: string; videoLabel: string; audioLabel: string; durationTick: number; frameCount: number } {
+interface GraphOptions {
+  maxWidth?: number | undefined;
+  defaultFontFile?: string | undefined;
+  /** Composite over transparency and keep alpha in the output (see-through export presets). */
+  alpha?: boolean | undefined;
+  outputPixelFormat?: string | undefined;
+  backdropKeys?: Map<string, ResolvedBackdropKey> | undefined;
+}
+
+function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: InputSpec[], captionFiles: Map<string, string>, graphOptions: GraphOptions = {}): { graph: string; videoLabel: string; audioLabel: string; durationTick: number; frameCount: number } {
+  const { maxWidth, defaultFontFile, alpha = false } = graphOptions;
   const durationTick = sequenceDuration(sequence);
   if (durationTick <= 0) throw new StudioException("EMPTY_SEQUENCE", "The sequence has no renderable duration.", "input");
   const frameCount = ticksToFrames(durationTick, project.settings.fps, "ceil");
   const durationSeconds = ticksToSeconds(framesToTicks(frameCount, project.settings.fps));
   const fps = `${project.settings.fps.numerator}/${project.settings.fps.denominator}`;
   const { width, height } = project.settings.raster;
-  const statements: string[] = [`color=c=${ffmpegColor(project.settings.background)}:s=${width}x${height}:r=${fps}:d=${durationSeconds},format=rgba[base0]`];
+  const background = alpha ? "black@0" : ffmpegColor(project.settings.background);
+  const statements: string[] = [`color=c=${background}:s=${width}x${height}:r=${fps}:d=${durationSeconds},format=rgba[base0]`];
   let videoLabel = "base0";
   const visual = inputs.filter((input) => input.clip.source.type === "color" || input.media?.probe.hasVideo || input.media?.kind === "image" || input.clip.source.type === "animation")
     .sort((a, b) => {
@@ -213,18 +240,36 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
     const sourceDuration = ticksToSeconds(Math.round(clip.durationTick * rate));
     const start = ticksToSeconds(clip.startTick);
     const transform = clipTransformFilters(clip, project.settings.raster);
-    const filters = [
+    const timing = [
       `trim=start=${sourceStart}:duration=${sourceDuration}`,
       `setpts=(PTS-STARTPTS)/${rate}+${start}/TB`,
-      `fps=${fps}`,
+      `fps=${fps}`
+    ];
+    const finishing = [
       ...transform.filters,
       ...videoEffectFilters(clip.effects),
       ...fadeFilters(sequence, clip)
     ];
     const clipLabel = `vclip${visualIndex}`;
-    statements.push(`[${input.inputIndex}:v]${filters.join(",")}[${clipLabel}]`);
+    // Backdrop removal works on the clip's own pixels, before scaling or padding blend edges together.
+    const keys = clip.effects.filter((effect) => effect.enabled && effect.type === "backdropKey").flatMap((effect) => {
+      const key = graphOptions.backdropKeys?.get(effect.id);
+      return key ? [{ id: effect.id, key }] : [];
+    });
+    if (keys.length) {
+      let label = `vtimed${visualIndex}`;
+      statements.push(`[${input.inputIndex}:v]${timing.join(",")}[${label}]`);
+      keys.forEach(({ key }, keyIndex) => {
+        const next = `vkeyed${visualIndex}_${keyIndex}`;
+        statements.push(...backdropKeyGraph(label, next, key, `bk${visualIndex}_${keyIndex}`));
+        label = next;
+      });
+      statements.push(`[${label}]${finishing.join(",")}[${clipLabel}]`);
+    } else {
+      statements.push(`[${input.inputIndex}:v]${[...timing, ...finishing].join(",")}[${clipLabel}]`);
+    }
     const next = `base${visualIndex + 1}`;
-    statements.push(`[${videoLabel}][${clipLabel}]overlay=x=${transform.x}:y=${transform.y}:eof_action=pass:shortest=0[${next}]`);
+    statements.push(`[${videoLabel}][${clipLabel}]overlay=x=${transform.x}:y=${transform.y}:eof_action=pass:shortest=0${alpha ? ":format=rgb" : ""}[${next}]`);
     videoLabel = next;
   });
 
@@ -276,7 +321,7 @@ function buildFilterGraph(project: StudioProject, sequence: Sequence, inputs: In
   else statements.push(`anullsrc=r=${project.settings.sampleRate}:cl=${project.settings.channels === 1 ? "mono" : "stereo"},atrim=duration=${durationSeconds}[${audioLabel}]`);
   const outputWidth = maxWidth && width > maxWidth ? Math.max(2, Math.floor(maxWidth / 2) * 2) : width;
   const outputHeight = outputWidth !== width ? Math.max(2, Math.round(height * outputWidth / width / 2) * 2) : height;
-  statements.push(`[${videoLabel}]${outputWidth !== width ? `scale=${outputWidth}:${outputHeight}:flags=lanczos,` : ""}format=yuv420p[vout]`);
+  statements.push(`[${videoLabel}]${outputWidth !== width ? `scale=${outputWidth}:${outputHeight}:flags=lanczos,` : ""}format=${graphOptions.outputPixelFormat ?? "yuv420p"}[vout]`);
   return { graph: statements.join(";\n"), videoLabel: "vout", audioLabel, durationTick: framesToTicks(frameCount, project.settings.fps), frameCount };
 }
 
@@ -300,7 +345,7 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
     media: project.media.filter((asset) => mediaIds.has(asset.id)).map((asset) => ({ id: asset.id, hash: asset.storage.sha256, offline: asset.offline ?? false })),
     animations: project.animations.filter((animation) => animationIds.has(animation.id)),
     output: { maxWidth: options.maxWidth ?? null, crf: options.crf ?? null, encoderPreset: options.encoderPreset ?? null, defaultFontFile: config.defaultFontFile ?? null },
-    renderer: 3
+    renderer: 4
   });
   const cachePath = path.join(store.root, "cache", "renders", `${renderKey}.${preset.container}`);
   const durationTick = sequenceDuration(sequence);
@@ -335,7 +380,12 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
       await writeFile(textPath, caption.text, "utf8");
       captionFiles.set(caption.id, textPath);
     }));
-    const compiled = buildFilterGraph(project, sequence, inputs, captionFiles, options.maxWidth, config.defaultFontFile);
+    const alpha = preset.alpha === true;
+    const backdropKeys = await resolveBackdropKeys(inputs, config, options.signal);
+    const compiled = buildFilterGraph(project, sequence, inputs, captionFiles, {
+      maxWidth: options.maxWidth, defaultFontFile: config.defaultFontFile, alpha, backdropKeys,
+      outputPixelFormat: alpha ? (preset.videoCodec === "ffv1" ? "yuva444p" : "yuva420p") : "yuv420p"
+    });
     const graphPath = path.join(scratch, "filter-complex.txt");
     await writeFile(graphPath, compiled.graph, "utf8");
     const inputArgs = inputs.flatMap((input) => input.args);
@@ -345,6 +395,9 @@ export async function renderSequence(store: ProjectStore, config: StudioConfig, 
       "-frames:v", String(compiled.frameCount), "-shortest",
       "-c:v", preset.videoCodec ?? "libx264",
       ...(preset.videoCodec === "libx264" ? ["-preset", options.encoderPreset ?? "veryfast", "-crf", String(options.crf ?? preset.crf ?? 18)] : []),
+      ...(preset.videoCodec === "libvpx-vp9" ? ["-b:v", "0", "-crf", String(options.crf ?? preset.crf ?? 30), "-deadline", "good", "-cpu-used", "4", "-row-mt", "1"] : []),
+      // VP9 keeps transparency in a side stream; alt-ref frames are not supported with it.
+      ...(alpha && preset.videoCodec === "libvpx-vp9" ? ["-auto-alt-ref", "0", "-metadata:s:v:0", "alpha_mode=1"] : []),
       "-c:a", preset.audioCodec ?? "aac",
       ...(preset.audioBitrate ? ["-b:a", preset.audioBitrate] : []),
       ...(preset.faststart ? ["-movflags", "+faststart"] : []),

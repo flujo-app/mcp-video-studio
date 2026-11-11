@@ -430,3 +430,7 @@
 .display-pip .monitor { max-height: calc(100% - 28px); }
 .display-pip .transport { height: 28px; }
 .display-pip .transport span { display: none; }
+
+/* Backdrop removal controls inside the effect list. */
+.effect-row.backdrop-key { flex-wrap: wrap; row-gap: 0; }
+.effect-row.backdrop-key > label { flex-basis: 100%; margin: 6px 0 0; }

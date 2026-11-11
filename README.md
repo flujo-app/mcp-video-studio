@@ -29,6 +29,7 @@ Remaining v1 work is tracked in [ROADMAP.md](./ROADMAP.md):
 - Multi-track video compositing and audio mixing with trim, move, split, playback rate, transform, opacity, gain, pan, fades, EQ/filter/effect stacks, and transitions.
 - Semantic render caching shared by program previews and exports, with atomic publication, cache-hit provenance, LRU-style access timestamps, and bounded automatic eviction.
 - H.264/AAC MP4 and lossless FFV1 presets, faststart, frame-exact output, hashes, provenance, and full-decode QC.
+- See-through loops: remove a plain backdrop colour (picked by hand or read from the frame corners), make a clip loop without a visible jump (cross-fade or ping-pong), and export a WebM that keeps its transparent background (VP9 with alpha, plays see-through in browsers) plus transparent PNG stills. Footage that is already transparent stays transparent all the way through. A transparency check confirms the alpha channel, clear corners, a solid subject, and a smooth loop seam. See [See-through loops](#see-through-loops).
 - First-class caption cues with frame-aligned timing, editable style and position, caption tracks, MCP operations, and deterministic FFmpeg burn-in.
 - Declarative animation scene graph with tick-based easing and operations, plus self-contained HTML animations with an offline frame hook.
 - Persisted generated-content artifacts for narration, music, captions, and animation: immutable parent-linked versions, provider/model/request provenance, draft/approve/reject state, timeline activation, and a human generation center in Studio.
@@ -103,10 +104,26 @@ The main MCP tools are:
 - `get_generation_providers`, `list_generated_artifacts`, `generate_narration`, `generate_music`, `generate_captions`, `generate_animation`, `regenerate_generated_artifact`, `review_generated_version`
 - `set_animation`, `undo`, `redo`
 - `render_sequence`, `run_qc`, `list_jobs`, `get_job`, `cancel_job`
+- `detect_backdrop_color`, `export_alpha_loop`, `export_alpha_still`, `check_alpha`
 
 All mutations take `expectedRevision`. A concurrent human/agent edit returns a structured `REVISION_CONFLICT` instead of overwriting newer work.
 
 Generated content uses the same rule. The first completed version is attached to its timeline slot as a draft. Regeneration creates a child version without changing the active clip. Activating or approving a version swaps only its media/animation source—or its owned caption cues—so clip placement, filters, automation references, and audio settings survive. A later MCP session can recover the complete lifecycle with `list_generated_artifacts`.
+
+## See-through loops
+
+Short clips of a character filmed or generated on a plain backdrop can be turned into transparent, endlessly looping overlays. Everything runs on FFmpeg; no AI models are involved.
+
+**From an AI client, in one call.** `export_alpha_loop` takes one source — `mediaId` (with `projectPath`), a whole `sequenceId` (with `projectPath`), or any `filePath` — and an `outputPath` ending in `.webm`. It queues one job that:
+
+1. removes the backdrop (`removeBackdrop`, on by default unless the source is already transparent). `backdropColor` is `auto` by default, which reads the colour from the frame corners; `keyMethod` (`auto`, `chroma` for green/blue/magenta screens, `color` for white/grey/black), `tolerance` (default 0.15), `softness` (default 0.08) and `despill` (default 1, pulls the backdrop tint out of the edges) fine-tune it;
+2. makes the loop seamless (`loopMode`: `crossfade` fades the last frames into the first ones, `pingpong` plays forward then backward, `none` leaves the clip as it is). `crossfadeFrames` defaults to about a quarter second and is only used when the end does not already flow into the start; a final frame that repeats the first one is dropped automatically (`dropDuplicateEndFrame`);
+3. writes the WebM (VP9, `yuva420p`, tagged `ALPHA_MODE=1`, quality `crf` default 30) and, for each time in `stillTimesTick`, a transparent PNG next to it;
+4. checks the result and reports the exact frame count and duration, the backdrop colour it used, the seam before and after, and the QC checks.
+
+`startTick`/`durationTick` select part of the source. `detect_backdrop_color` reports the backdrop colour without changing anything, `export_alpha_still` saves one transparent frame (a quick way to try key settings), and `check_alpha` checks any file: alpha channel present, corners see-through in every frame, subject still solid, and with `loop: true` a smooth seam. `run_qc` adds the same transparency checks whenever the file has an alpha channel.
+
+**On the timeline.** The `backdropKey` clip effect (parameters `color` — `auto` or `#rrggbb` — `method`, `tolerance`, `softness`, `despill`) removes a backdrop inside a project, and the `web-vp9-alpha` (see-through WebM) and `archive-ffv1-alpha` (lossless with transparency) export presets keep the background transparent. In Studio: select a clip, press **+ Remove backdrop** in the inspector, then choose **See-through WebM (VP9 alpha)** on the Export tab and tick **Seamless loop**.
 
 ## Project layout
 
@@ -186,8 +203,10 @@ The normal suite has exact-time, command/store/history, animation-evaluator, and
 
 ```powershell
 $env:RUN_FFMPEG_INTEGRATION='1'
-npx vitest run tests/render.integration.test.ts tests/preview.integration.test.ts
+npx vitest run tests/render.integration.test.ts tests/preview.integration.test.ts tests/alpha.integration.test.ts
 ```
+
+The see-through loop test generates an orange square moving over a green backdrop with FFmpeg and checks that the backdrop becomes transparent, the square stays solid, the WebM carries alpha, PNG stills are transparent, and the loop's last frame flows into its first.
 
 The implementation never constructs shell command strings for media work. It passes explicit arguments with `shell: false`, publishes only completed artifacts, removes render scratch data, and preserves structured dependency/runtime errors.
 

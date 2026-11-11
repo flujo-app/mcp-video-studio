@@ -33,6 +33,10 @@ export interface MediaProbe {
   audioCodec?: string;
   sampleRate?: number;
   channels?: number;
+  /** Pixel format reported by ffprobe for the first video stream. */
+  pixelFormat?: string;
+  /** True when the video stream carries transparency (an alpha pixel format or the VP8/VP9 ALPHA_MODE tag). */
+  hasAlpha?: boolean;
 }
 
 export type ManagedStorage = { mode: "managed"; sha256: string; relativePath: string; bytes: number };
@@ -292,6 +296,8 @@ export interface ExportPreset {
   videoBitrate?: string;
   audioBitrate?: string;
   faststart?: boolean;
+  /** Keep a see-through background: the sequence is composited over transparency and encoded with an alpha channel. */
+  alpha?: boolean;
 }
 
 export interface StudioProject {
@@ -345,7 +351,7 @@ export type StudioResult<T> = ({ success: true } & T) | FailureResult;
 
 export interface JobRecord {
   id: UUID;
-  type: "probe" | "proxy" | "thumbnail" | "waveform" | "preview" | "render" | "animation" | "generation" | "qc";
+  type: "probe" | "proxy" | "thumbnail" | "waveform" | "preview" | "render" | "animation" | "generation" | "qc" | "alpha";
   status: "queued" | "running" | "completed" | "failed" | "cancelled";
   progress: number;
   message: string;

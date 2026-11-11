@@ -1,5 +1,5 @@
 import { createHash, randomUUID } from "node:crypto";
-import { stat } from "node:fs/promises";
+import { rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { chromium } from "patchright";
 import {
@@ -38,7 +38,7 @@ import {
   relinkMedia,
   type StudioConfig
 } from "@mcp-video-studio/media";
-import { JobManager, renderCacheStats, renderSequence, runQc } from "@mcp-video-studio/renderer";
+import { detectBackdropColor, exportAlphaLoop, exportAlphaStill, JobManager, renderCacheStats, renderSequence, runAlphaQc, runQc, type AlphaKeyRequest, type LoopMode } from "@mcp-video-studio/renderer";
 import { renderAnimation } from "@mcp-video-studio/animation";
 import { GenerationProviders, type TranscriptionResult } from "./generation.js";
 
@@ -107,6 +107,26 @@ function transcriptCues(transcript: TranscriptionResult, artifact: GeneratedArti
     const endTick = Math.max(startTick + frameTick, align(rawEnd, "ceil"));
     return [{ id: randomUUID(), trackId, startTick, durationTick: endTick - startTick, text: group.map((word) => word.text.trim()).join(" ").replace(/\s+([,.!?;:])/g, "$1"), style }];
   });
+}
+
+export interface AlphaSourceInput {
+  projectPath?: string | undefined;
+  mediaId?: string | undefined;
+  sequenceId?: string | undefined;
+  filePath?: string | undefined;
+}
+
+export interface AlphaKeyInput {
+  removeBackdrop?: boolean | undefined;
+  backdropColor?: string | undefined;
+  keyMethod?: "auto" | "chroma" | "color" | undefined;
+  tolerance?: number | undefined;
+  softness?: number | undefined;
+  despill?: number | undefined;
+}
+
+function keyRequest(input: AlphaKeyInput): AlphaKeyRequest {
+  return { removeBackdrop: input.removeBackdrop, color: input.backdropColor, method: input.keyMethod, tolerance: input.tolerance, softness: input.softness, despill: input.despill };
 }
 
 export class StudioRuntime {
@@ -597,6 +617,93 @@ export class StudioRuntime {
       onProgress: (value, message) => void progress(value, message)
     }));
     return { success: true, cached: false, revision, job };
+  }
+
+  /** A single media asset or file. Sequences are rendered inside the job instead. */
+  private async alphaFile(input: AlphaSourceInput): Promise<{ inputPath: string; name: string }> {
+    const sources = [input.mediaId, input.sequenceId, input.filePath].filter((value) => typeof value === "string" && value.trim());
+    if (sources.length !== 1) throw new StudioException("ALPHA_SOURCE_REQUIRED", "Give exactly one source: mediaId (with projectPath), sequenceId (with projectPath), or filePath.", "input");
+    if (input.filePath) return { inputPath: path.resolve(input.filePath), name: path.basename(input.filePath) };
+    if (!input.projectPath) throw new StudioException("PROJECT_PATH_REQUIRED", "projectPath is required for project media and sequences.", "input");
+    const store = this.store(input.projectPath);
+    const project = await store.read();
+    if (input.mediaId) {
+      const media = project.media.find((candidate) => candidate.id === input.mediaId);
+      if (!media) throw new StudioException("MEDIA_NOT_FOUND", `Media not found: ${input.mediaId}`, "input");
+      if (!media.probe.hasVideo) throw new StudioException("NO_VIDEO_STREAM", `${media.name} has no picture.`, "input");
+      return { inputPath: mediaPath(store, media), name: media.name };
+    }
+    const sequence = project.sequences.find((candidate) => candidate.id === input.sequenceId);
+    if (!sequence) throw new StudioException("SEQUENCE_NOT_FOUND", `Sequence not found: ${input.sequenceId}`, "input");
+    return { inputPath: "", name: sequence.name };
+  }
+
+  async detectBackdrop(input: AlphaSourceInput & { atTick?: number | undefined }): Promise<Record<string, unknown>> {
+    if (input.sequenceId) throw new StudioException("ALPHA_SOURCE_UNSUPPORTED", "Backdrop detection reads a media asset or file, not a sequence.", "input");
+    const source = await this.alphaFile(input);
+    const detection = await detectBackdropColor(source.inputPath, this.config, { atTick: input.atTick ?? 0 });
+    return { success: true, source: source.name, ...detection };
+  }
+
+  /** Remove a plain backdrop, make a seamless loop, and export a see-through WebM (plus PNG stills) as one background job. */
+  async alphaLoop(input: AlphaSourceInput & AlphaKeyInput & {
+    outputPath: string; startTick?: number | undefined; durationTick?: number | undefined; loopMode?: LoopMode | undefined;
+    crossfadeFrames?: number | undefined; dropDuplicateEndFrame?: boolean | undefined; stillTimesTick?: number[] | undefined; crf?: number | undefined;
+  }): Promise<Record<string, unknown>> {
+    const source = await this.alphaFile(input);
+    const outputPath = path.resolve(input.outputPath);
+    if (path.extname(outputPath).toLowerCase() !== ".webm") throw new StudioException("INVALID_OUTPUT", "See-through loops are written as .webm files.", "input");
+    const job = await this.jobs.enqueue("alpha", `Making a see-through loop from ${source.name}`, async ({ signal, progress }) => {
+      let inputPath = source.inputPath;
+      let renderedSequence: string | undefined;
+      let share = 1;
+      try {
+        if (input.sequenceId) {
+          // Render the timeline over transparency into a lossless intermediate first.
+          renderedSequence = path.join(this.config.scratchDir, `alpha-sequence-${randomUUID()}.mkv`);
+          share = 0.6;
+          await renderSequence(this.store(input.projectPath!), this.config, {
+            sequenceId: input.sequenceId, presetId: "archive-ffv1-alpha", outputPath: renderedSequence, signal,
+            onProgress: (value, message) => void progress(value * 0.4, message)
+          });
+          inputPath = renderedSequence;
+        }
+        const key = keyRequest(input);
+        return await exportAlphaLoop(this.config, {
+          inputPath, outputPath, startTick: input.startTick, durationTick: input.durationTick,
+          key: input.sequenceId ? { ...key, removeBackdrop: input.removeBackdrop ?? false } : key,
+          mode: input.loopMode, crossfadeFrames: input.crossfadeFrames, dropDuplicateEndFrame: input.dropDuplicateEndFrame,
+          stillTimesTick: input.stillTimesTick, crf: input.crf, signal,
+          onProgress: (value, message) => void progress(1 - share + value * share, message)
+        });
+      } finally {
+        if (renderedSequence) await rm(renderedSequence, { force: true }).catch(() => undefined);
+      }
+    });
+    return { success: true, outputPath, job };
+  }
+
+  async alphaStill(input: AlphaSourceInput & AlphaKeyInput & { atTick: number; outputPath: string }): Promise<Record<string, unknown>> {
+    if (input.sequenceId) throw new StudioException("ALPHA_SOURCE_UNSUPPORTED", "Render the sequence with a see-through preset first, then save a still from that file.", "input");
+    const source = await this.alphaFile(input);
+    const outputPath = path.resolve(input.outputPath);
+    if (path.extname(outputPath).toLowerCase() !== ".png") throw new StudioException("INVALID_OUTPUT", "See-through stills are written as .png files.", "input");
+    const job = await this.jobs.enqueue("alpha", `Saving a see-through still from ${source.name}`, async ({ signal, progress }) => {
+      await progress(0.1, "Saving still");
+      const result = await exportAlphaStill(this.config, { inputPath: source.inputPath, outputPath, atTick: input.atTick, key: keyRequest(input), signal });
+      await progress(1); return result;
+    });
+    return { success: true, outputPath, job };
+  }
+
+  async alphaQc(input: { filePath: string; loop?: boolean | undefined }): Promise<Record<string, unknown>> {
+    const filePath = path.resolve(input.filePath);
+    const job = await this.jobs.enqueue("qc", "Checking transparency", async ({ signal, progress }) => {
+      await progress(0.05, "Decoding and measuring transparency");
+      const result = await runAlphaQc(filePath, this.config, { loop: input.loop, signal });
+      await progress(1); return result;
+    });
+    return { success: true, job };
   }
 
   async qc(input: { projectPath: string; sequenceId: string; filePath: string }): Promise<Record<string, unknown>> {

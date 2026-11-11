@@ -20,8 +20,16 @@ export function defaultClip(trackId: string, source: Clip["source"], name: strin
 
 export const DEFAULT_EXPORT_PRESETS: ExportPreset[] = [
   { id: "web-h264-1080p", name: "Web H.264", container: "mp4", videoCodec: "libx264", audioCodec: "aac", crf: 18, audioBitrate: "192k", faststart: true },
-  { id: "archive-ffv1", name: "Lossless FFV1", container: "mkv", videoCodec: "ffv1", audioCodec: "flac" }
+  { id: "archive-ffv1", name: "Lossless FFV1", container: "mkv", videoCodec: "ffv1", audioCodec: "flac" },
+  { id: "web-vp9-alpha", name: "See-through WebM (VP9 alpha)", container: "webm", videoCodec: "libvpx-vp9", audioCodec: "libopus", crf: 30, audioBitrate: "128k", alpha: true },
+  { id: "archive-ffv1-alpha", name: "Lossless FFV1 with transparency", container: "mkv", videoCodec: "ffv1", audioCodec: "flac", alpha: true }
 ];
+
+/** Presets stored in the project plus any built-in preset the project predates. */
+export function exportPresetsFor(project: Pick<StudioProject, "exportPresets">): ExportPreset[] {
+  const ids = new Set(project.exportPresets.map((preset) => preset.id));
+  return [...project.exportPresets, ...DEFAULT_EXPORT_PRESETS.filter((preset) => !ids.has(preset.id)).map((preset) => ({ ...preset }))];
+}
 
 export function createDefaultProject(name: string): StudioProject {
   const now = new Date().toISOString();

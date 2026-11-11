@@ -1,6 +1,6 @@
 # MCP Video Studio roadmap
 
-- Status date: 2026-08-15
+- Status date: 2026-11-11
 - Current release: [`0.1.1`](https://www.npmjs.com/package/mcp-video-studio)
 - Canonical repository: [`flujo-app/mcp-video-studio`](https://github.com/flujo-app/mcp-video-studio)
 
@@ -19,6 +19,10 @@ This roadmap records implementation state between the architectural targets in [
 - Persistent generated artifacts with immutable parent-linked versions, provider/model/request provenance, draft/approve/reject review state, and activation that preserves clip timing, effects, gain, and automation references.
 - Unit and integration coverage for exact time, stores/history, captions, generation migration/activation, filters, render/QC, preview/range serving, and deterministic Chromium animation capture.
 
+## Added since 0.1.1 (not yet released)
+
+- **See-through loops** ([#8](https://github.com/flujo-app/mcp-video-studio/issues/8)): remove a plain backdrop colour with FFmpeg (given or read from the frame corners, with tolerance, softness and spill controls), make a clip loop without a visible jump (cross-fade or ping-pong, with exact frame counts), and export a transparent VP9 WebM plus transparent PNG stills. Transparent sources stay transparent through keying, looping and export, including timeline renders. New MCP tools `detect_backdrop_color`, `export_alpha_loop`, `export_alpha_still` and `check_alpha`; a `backdropKey` clip effect; `web-vp9-alpha` and `archive-ffv1-alpha` export presets; transparency checks in `run_qc`. Studio has **+ Remove backdrop**, the see-through presets and a **Seamless loop** export option. Transparent preview, a media-bin loop action and keying refinements are tracked in [#9](https://github.com/flujo-app/mcp-video-studio/issues/9).
+
 ## Phase progress
 
 | Technical-plan phase | State in 0.1.1 | Delivered | Remaining gate |
@@ -30,7 +34,7 @@ This roadmap records implementation state between the architectural targets in [
 | Phase 4 — human editor | Partial | Usable project/media/timeline/preview/inspector/jobs/generation/export shell with pointer and keyboard core edits | Full NLE interaction set, long-timeline virtualization, richer monitor controls, accessibility and conflict-reapply UX; [#1](https://github.com/flujo-app/mcp-video-studio/issues/1), [#6](https://github.com/flujo-app/mcp-video-studio/issues/6) |
 | Phase 5 — production audio | Partial | Custom audio clips/tracks, waveform artifacts, gain, pan, fades, mute/solo render semantics, basic EQ/filter/dynamics, playback rate and loudness QC | Automation compilation/UI, ranged level edits, ducking, mixer/meters, complete effects, time-stretch/pitch and preview parity; [#2](https://github.com/flujo-app/mcp-video-studio/issues/2) |
 | Phase 6 — animation | Partial | Deterministic scene schema/evaluator, easing/operations, HTML frame protocol, headless render/cache, ordinary timeline clips, generated version lifecycle | Full node/keyframe editor, fine-grained commands, expanded operations/templates, preview pixel parity and sandbox hardening; [#4](https://github.com/flujo-app/mcp-video-studio/issues/4) |
-| Phase 7 — finishing surfaces | Partial | Initial video/audio effects, transitions, editable burned captions, basic QC and export | Rich titles/fonts/subtitles, broader effects, evidence-linked QC, formats/hardware presets, archive/import and export history; [#5](https://github.com/flujo-app/mcp-video-studio/issues/5) |
+| Phase 7 — finishing surfaces | Partial | Initial video/audio effects, transitions, editable burned captions, basic QC and export; backdrop removal, seamless loops, see-through WebM/PNG export and transparency QC | Rich titles/fonts/subtitles, broader effects, evidence-linked QC, formats/hardware presets, archive/import and export history; [#5](https://github.com/flujo-app/mcp-video-studio/issues/5); see-through follow-ups in [#9](https://github.com/flujo-app/mcp-video-studio/issues/9) |
 | Phase 8 — release hardening | Early | Windows/Ubuntu CI, release helper, secret redaction, cancellation, bounded logs/caches/jobs and initial real-runtime tests | Platform/security/fault/performance/accessibility audits and all acceptance productions; [#6](https://github.com/flujo-app/mcp-video-studio/issues/6) |
 | Cross-cutting generation lifecycle | Functional foundation | Narration/music/caption/animation providers, durable jobs, version lineage, review state, activation/revert semantics and Studio review center | A/B/ranged review, partial regeneration, provider discovery/retry/cost UX, local adoption and transcript correction; [#3](https://github.com/flujo-app/mcp-video-studio/issues/3) |
 

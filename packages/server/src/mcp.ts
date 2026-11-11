@@ -181,7 +181,7 @@ export function createMcpServer(runtime: StudioRuntime, gateway: Gateway): McpSe
   }, async ({ projectPath, expectedRevision, ...command }) => invoke(() => runtime.apply(projectPath, expectedRevision, [{ type: "clip.remove", ...command }])));
 
   server.registerTool("update_clip", {
-    description: "Update clip transforms, crop, playback rate, effects, audio, or metadata.",
+    description: "Update clip transforms, crop, playback rate, effects, audio, or metadata. Video effect types: color, brightness, blur, sharpen, vignette, chromaKey, and backdropKey (removes a plain backdrop; parameters color (\"auto\" or #rrggbb), method, tolerance, softness, despill).",
     inputSchema: { ...projectRevision, sequenceId: z.string(), clipId: z.string(), patch: z.record(z.string(), z.unknown()) },
     annotations: { destructiveHint: true, openWorldHint: false }
   }, async ({ projectPath, expectedRevision, sequenceId, clipId, patch }) => invoke(() => runtime.apply(projectPath, expectedRevision, [{ type: "clip.update", sequenceId, clipId, patch: patch as never }])));
@@ -348,20 +348,70 @@ export function createMcpServer(runtime: StudioRuntime, gateway: Gateway): McpSe
     annotations: { destructiveHint: true, openWorldHint: false }
   }, async ({ projectPath, expectedRevision }) => invoke(() => runtime.redo(projectPath, expectedRevision)));
 
+  const alphaSource = {
+    projectPath: z.string().min(1).optional().describe("Project folder; required with mediaId or sequenceId."),
+    mediaId: z.string().optional().describe("A video or image asset in the project."),
+    filePath: z.string().optional().describe("Any local video or image file (no project needed).")
+  };
+  const backdropKey = {
+    removeBackdrop: z.boolean().optional().describe("Remove a plain backdrop colour. Defaults to true when the source has no transparency of its own (false for sequences)."),
+    backdropColor: z.string().optional().describe("Backdrop colour as #rrggbb, 0xrrggbb or a basic colour name. Default \"auto\" reads it from the frame corners."),
+    keyMethod: z.enum(["auto", "chroma", "color"]).optional().describe("chroma keys on hue (green/blue/magenta screens); color keys on full colour distance (white/grey/black backdrops). auto picks one."),
+    tolerance: z.number().min(0.01).max(1).optional().describe("How far a colour may be from the backdrop and still be removed. Default 0.15."),
+    softness: z.number().min(0).max(1).optional().describe("Width of the soft edge between removed and kept colours. Default 0.08."),
+    despill: z.number().min(0).max(1).optional().describe("How strongly the backdrop tint is pulled out of the subject's edges. Default 1; 0 turns it off.")
+  };
+
+  server.registerTool("detect_backdrop_color", {
+    description: "Read the plain backdrop colour of a clip or image from its frame corners. Returns the colour, the suggested key method, and how even the backdrop is.",
+    inputSchema: { ...alphaSource, atTick: z.number().int().nonnegative().optional() },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  }, async (input) => invoke(() => runtime.detectBackdrop(input)));
+
+  server.registerTool("export_alpha_loop", {
+    description: "Queue one job that removes a plain backdrop, makes the clip loop without a visible jump, and exports a see-through WebM (VP9 with alpha, plays transparently in browsers), plus optional see-through PNG stills. Works on a project media asset, a whole project sequence, or a file. The result reports the exact frame count and duration and includes transparency and loop-seam QC.",
+    inputSchema: {
+      ...alphaSource,
+      sequenceId: z.string().optional().describe("Render this project sequence over transparency and loop it (use backdropKey clip effects to remove backdrops on the timeline)."),
+      outputPath: z.string().min(1).describe("Destination .webm file."),
+      ...backdropKey,
+      loopMode: z.enum(["crossfade", "pingpong", "none"]).default("crossfade").describe("crossfade fades the end into the start; pingpong plays forward then backward; none keeps the clip as it is."),
+      crossfadeFrames: z.number().int().min(1).max(240).optional().describe("Cross-fade length. Default: about a quarter second, and only when the end does not already flow into the start."),
+      dropDuplicateEndFrame: z.boolean().optional().describe("Drop the final frame. Default: only when it repeats the first frame."),
+      startTick: z.number().int().nonnegative().optional().describe("Start of the source range to use."),
+      durationTick: z.number().int().positive().optional().describe("Length of the source range to use."),
+      stillTimesTick: z.array(z.number().int().nonnegative()).max(50).optional().describe("Times within the finished loop to save as see-through PNG stills next to the WebM."),
+      crf: z.number().int().min(4).max(63).optional().describe("VP9 quality, lower is better. Default 30.")
+    },
+    annotations: { destructiveHint: false, openWorldHint: false }
+  }, async (input) => invoke(() => runtime.alphaLoop(input)));
+
+  server.registerTool("export_alpha_still", {
+    description: "Queue a see-through PNG of one frame. Removes a plain backdrop first unless the source is already transparent, so it is also a quick way to try key settings before exporting a loop.",
+    inputSchema: { ...alphaSource, atTick: z.number().int().nonnegative(), outputPath: z.string().min(1).describe("Destination .png file."), ...backdropKey },
+    annotations: { destructiveHint: false, openWorldHint: false }
+  }, async (input) => invoke(() => runtime.alphaStill(input)));
+
+  server.registerTool("check_alpha", {
+    description: "Queue a transparency QC of a video or image file: alpha channel present and decodable, corners see-through in every frame, subject still solid, and with loop=true that the last frame flows into the first.",
+    inputSchema: { filePath: z.string().min(1), loop: z.boolean().optional() },
+    annotations: { readOnlyHint: true, openWorldHint: false }
+  }, async (input) => invoke(() => runtime.alphaQc(input)));
+
   server.registerTool("render_sequence", {
-    description: "Queue a deterministic FFmpeg render of a sequence.",
+    description: "Queue a deterministic FFmpeg render of a sequence. Built-in presets: web-h264-1080p, archive-ffv1, web-vp9-alpha (see-through WebM), archive-ffv1-alpha (lossless with transparency).",
     inputSchema: { projectPath: z.string(), sequenceId: z.string(), presetId: z.string(), outputPath: z.string() },
     annotations: { destructiveHint: false, openWorldHint: false }
   }, async (input) => invoke(() => runtime.render(input)));
 
   server.registerTool("run_qc", {
-    description: "Queue full-decode QC with raster, duration, faststart, loudness, peak, and checksum checks.",
+    description: "Queue full-decode QC with raster, duration, faststart, loudness, peak, and checksum checks. Files with transparency also get the see-through checks from check_alpha.",
     inputSchema: { projectPath: z.string(), sequenceId: z.string(), filePath: z.string() },
     annotations: { readOnlyHint: true, openWorldHint: false }
   }, async (input) => invoke(() => runtime.qc(input)));
 
   server.registerTool("list_jobs", {
-    description: "List render, proxy, waveform, animation, and QC jobs.",
+    description: "List render, proxy, waveform, animation, see-through (alpha), and QC jobs.",
     annotations: { readOnlyHint: true, openWorldHint: false }
   }, async () => invoke(async () => ({ success: true, jobs: runtime.jobs.list() })));
 
