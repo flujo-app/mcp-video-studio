@@ -194,7 +194,9 @@ export const StudioProjectSchema = z.object({
       videoCodec: z.string().optional(),
       audioCodec: z.string().optional(),
       sampleRate: safeInteger.positive().optional(),
-      channels: safeInteger.positive().optional()
+      channels: safeInteger.positive().optional(),
+      pixelFormat: z.string().optional(),
+      hasAlpha: z.boolean().optional()
     }),
     createdAt: z.string(),
     offline: z.boolean().optional()
@@ -211,7 +213,8 @@ export const StudioProjectSchema = z.object({
     crf: safeInteger.optional(),
     videoBitrate: z.string().optional(),
     audioBitrate: z.string().optional(),
-    faststart: z.boolean().optional()
+    faststart: z.boolean().optional(),
+    alpha: z.boolean().optional()
   })),
   activeSequenceId: id,
   createdAt: z.string(),

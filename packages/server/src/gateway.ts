@@ -98,6 +98,18 @@ export async function startGateway(runtime: StudioRuntime, token: string): Promi
         if (url.pathname === "/api/generated/review") { json(res, 200, await runtime.reviewGeneratedVersion({ projectPath: String(input.projectPath), expectedRevision: Number(input.expectedRevision), artifactId: String(input.artifactId), versionId: String(input.versionId), action: input.action === "approve" ? "approve" : input.action === "reject" ? "reject" : "activate", reviewer: String(input.reviewer || "Studio user"), ...(typeof input.note === "string" && input.note ? { note: input.note } : {}) })); return; }
         if (url.pathname === "/api/preview") { json(res, 202, await runtime.renderPreview({ projectPath: String(input.projectPath), sequenceId: String(input.sequenceId) })); return; }
         if (url.pathname === "/api/render") { json(res, 202, await runtime.render({ projectPath: String(input.projectPath), sequenceId: String(input.sequenceId), presetId: String(input.presetId), outputPath: String(input.outputPath) })); return; }
+        if (url.pathname === "/api/alpha-loop") {
+          const optionalNumber = (value: unknown) => typeof value === "number" && Number.isFinite(value) ? value : undefined;
+          json(res, 202, await runtime.alphaLoop({
+            projectPath: String(input.projectPath), outputPath: String(input.outputPath),
+            ...(typeof input.sequenceId === "string" ? { sequenceId: input.sequenceId } : {}),
+            ...(typeof input.mediaId === "string" ? { mediaId: input.mediaId } : {}),
+            ...(typeof input.removeBackdrop === "boolean" ? { removeBackdrop: input.removeBackdrop } : {}),
+            loopMode: input.loopMode === "pingpong" ? "pingpong" : input.loopMode === "none" ? "none" : "crossfade",
+            crossfadeFrames: optionalNumber(input.crossfadeFrames)
+          }));
+          return;
+        }
         if (url.pathname === "/api/qc") { json(res, 202, await runtime.qc({ projectPath: String(input.projectPath), sequenceId: String(input.sequenceId), filePath: String(input.filePath) })); return; }
         if (url.pathname === "/api/jobs/cancel") { json(res, 200, { success: true, job: await runtime.jobs.cancel(String(input.jobId)) }); return; }
       }
